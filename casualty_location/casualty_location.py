@@ -1,10 +1,10 @@
 import rclpy
 from rclpy.node import Node
+from rclpy.action import ActionClient
 from nav_msgs.msg import OccupancyGrid
 from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import NavigateToPose
-from rclpy.action import ActionClient
 from scipy.interpolate import interp1d
 import numpy as np
 from collections import deque
@@ -13,9 +13,25 @@ from geometry_msgs.msg import Quaternion
 from nav_msgs.msg import Odometry
 import matplotlib.pyplot as plt
 import math
-
+import array
 
 SENSOR_FOV = 60.0  # Field of view in degrees
+POSE_CACHE_SIZE = 100  # Number of poses to keep in the cache
+ODOM_RATE = 10.0 # Rate of odometry updates in Hz
+ORIGIN_CACHE_SIZE = 10 # Number of origin poses to keep in the cache
+MAP_RATE = 0.5 # Rate of map updates in Hz
+DELAY_IR = 0.5  # Delay in seconds for IR data processing
+
+GAZEBO = False  # Set to True if running in Gazebo simulation
+
+class BotPose(object):
+    def __init__(self, x, y, yaw):
+        self.x = x
+        self.y = y
+        self.yaw = yaw
+
+    def __str__(self):
+        return f"BotPose(x={self.x}, y={self.y}, yaw={self.yaw})"
 
 class FinderNode(Node):
     def __init__(self):
@@ -24,7 +40,6 @@ class FinderNode(Node):
 
         self.map_received = False
         self.pose_received = False
-        self.pose_data = None
         self.map_data = None
         self.grid = None
         self.thermal_confidence = None
@@ -32,20 +47,29 @@ class FinderNode(Node):
 
         self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, 10)
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
-        self.ir_sub = self.create_subscription(String, '/ir_data', self.ir_callback, 10)
+        
+        if not GAZEBO:
+            self.ir_sub = self.create_subscription(String, '/ir_data', self.ir_callback, 10)
+            self.latest_ir_data = None
+        else:
+            self.latest_ir_data = [20] * 8
 
         self.nav_to_pose_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
 
         self.robot_position = (0, 0)
         self.robot_yaw = 0.0
+        self.robot_cache = []
+        self.pose_cache_full = False
         self.origin = (0, 0)
+        self.origin_cache = []
+        self.origin_cache_full = False
         self.resolution = 0.0
+        self.pose_index = round(POSE_CACHE_SIZE - DELAY_IR * ODOM_RATE -1) # Index of the pose to use for navigation
+        self.origin_index = round(ORIGIN_CACHE_SIZE - DELAY_IR * MAP_RATE -1) # Index of the origin to use for navigation
 
         self.visited_frontiers = set()
         self.ignored_frontiers = []
         self.previous_frontier = None
-        
-        self.latest_ir_data = None
 
         self.fig, self.ax = None, None
         self.robot_marker, self.robot_arrow = None, None
@@ -60,6 +84,8 @@ class FinderNode(Node):
         origin_y = self.map_data.info.origin.position.y
         self.origin = (origin_x, origin_y)
         self.resolution = self.map_data.info.resolution
+        self.origin_cache.append(self.origin)
+        self.clean_origin_cache()
 
         if not self.map_received:
             self.map_received = True
@@ -81,9 +107,13 @@ class FinderNode(Node):
         self.robot_yaw = yaw
 
         self.pose_received = True
-        self.pose_data = msg
-        #self.paint_wall()
-        #self.update_plot()
+        pose = BotPose(x, y, yaw)
+        self.robot_cache.push(pose)
+        self.clean_pose_cache()
+
+        if GAZEBO:
+            self.paint_wall()
+            self.update_plot()
 
     def ir_callback(self,msg):
         try:
@@ -95,8 +125,17 @@ class FinderNode(Node):
         except Exception as e:
             self.get_logger().error(f"Failed to parse IR data: {e}")
 
-        
+    def clean_pose_cache(self):
+        # Remove old poses from the cache
+        if len(self.robot_cache) > POSE_CACHE_SIZE:
+            self.robot_cache.pop(0)
+            self.pose_cache_full = True
 
+    def clean_origin_cache(self):
+        # Remove old origins from the cache
+        if len(self.origin_cache) > ORIGIN_CACHE_SIZE:
+            self.origin_cache.pop(0)
+            self.origin_cache_full = True
 
     def init_plot(self):
         if not self.map_received:
@@ -130,15 +169,15 @@ class FinderNode(Node):
         self.fig.canvas.flush_events()
 
     def paint_wall(self):
-        if not self.map_received:
+        if not self.map_received or not self.pose_cache_full:
             return
 
-        cy = int((self.robot_position[0] - self.origin[0]) / self.resolution)
-        cx = int((self.robot_position[1] - self.origin[1]) / self.resolution)
+        cy = int((self.robot_cache[self.pose_index].x - self.origin_cache[self.origin_index].x) / self.resolution)
+        cx = int((self.robot_cache[self.pose_index].y - self.origin_cache[self.origin_index].y) / self.resolution)
         rows, cols = self.map_data.info.height, self.map_data.info.width
 
-        start_angle = math.degrees(self.robot_yaw) - SENSOR_FOV / 2
-        end_angle = math.degrees(self.robot_yaw) + SENSOR_FOV / 2
+        start_angle = math.degrees(self.robot_cache[self.pose_index].yaw) - SENSOR_FOV / 2
+        end_angle = math.degrees(self.robot_cache[self.pose_index].yaw) + SENSOR_FOV / 2
         num_rays = int(SENSOR_FOV * 2)
         
         data = self.latest_ir_data
@@ -179,8 +218,6 @@ class FinderNode(Node):
                                     if self.grid[adj_row][adj_col] != 0:
                                         # Update non-zero neighboring cells
                                         self.grid[adj_row][adj_col] = (self.grid[adj_row][adj_col] + interpolated_data[idx]) / 2
-
-                        self.thermal_confidence[row][col] += 1
                         break
                 else:
                     break
@@ -267,7 +304,9 @@ class FinderNode(Node):
         Choose the best frontier to explore based on distance, number of unknown cells around it, and direction.
         """
         rows, cols = map_array.shape 
-        robot_row, robot_col = self.robot_position
+        robot_col = int((self.robot_position[0] - self.map_data.info.origin.position.x) / self.map_data.info.resolution)
+        robot_row = int((self.robot_position[1] - self.map_data.info.origin.position.y) / self.map_data.info.resolution)
+
         chosen_frontier = None
 
         for frontier in frontiers:
