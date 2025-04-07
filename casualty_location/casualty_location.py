@@ -158,7 +158,7 @@ class FinderNode(Node):
 
         self.robot_marker = self.ax.plot(robot_x, robot_y, 'ro', markersize=10, label="Robot")[0]
 
-        arrow_length = 5
+        arrow_length = 3
         dx = arrow_length * math.cos(self.robot_yaw)
         dy = arrow_length * math.sin(self.robot_yaw)
         self.robot_arrow = self.ax.arrow(robot_x, robot_y, dx, dy, head_width=2, head_length=2, fc='r', ec='r')
@@ -303,7 +303,6 @@ class FinderNode(Node):
         """
         Choose the best frontier to explore based on distance, number of unknown cells around it, and direction.
         """
-        rows, cols = map_array.shape 
         robot_col = int((self.robot_position[0] - self.map_data.info.origin.position.x) / self.map_data.info.resolution)
         robot_row = int((self.robot_position[1] - self.map_data.info.origin.position.y) / self.map_data.info.resolution)
 
@@ -312,8 +311,6 @@ class FinderNode(Node):
         for frontier in frontiers:
             if frontier in self.visited_frontiers:
                 continue
-
-            #self.get_logger().info(f"robot row col {robot_row} {robot_col}")
 
             # Calculate distance to the robot
             distance = np.sqrt((robot_row - frontier[0])**2 + (robot_col - frontier[1])**2)
@@ -333,38 +330,9 @@ class FinderNode(Node):
             if skip:
                 continue
 
-            # Check for obstacles around the frontier
-            obstacle_free = True
-            check_range = 3
-            for i in range(r-check_range, r + check_range):
-                for j in range(c-check_range, c + check_range):
-                    try: # try-except to reject frontiers too close to boundary of map
-                        if map_array[i, j] > 0:  # Assuming > 0 represents an obstacle
-                            #obstacle_free = False
-                            break
-                    except:
-                        break
-                if not obstacle_free:
-                    break
-            #for i in range(max(0, r-check_range), min(rows, r+check_range)):
-            #   for j in range(max(0, c-check_range), min(cols, c+check_range)):
-            #        try:
-            #            if map_array[i, j] == 100:  # Assuming 100 represents an obstacle
-            #                obstacle_free = False
-            #                break
-            #        except IndexError:
-            #            continue
-            #    if not obstacle_free:
-            #        break
-            
             # Calculate the angular penalty
             frontier_angle = math.atan2(r - robot_row, c - robot_col)
             angular_penalty = min(abs(frontier_angle - self.robot_yaw), 2 * math.pi - abs(frontier_angle - self.robot_yaw)) / math.pi
-
-            if not obstacle_free:
-                # self.get_logger().info(f"Frontier at ({r}, {c}) is too close to an obstacle")
-                self.ignored_frontiers.append(frontier) # add to ignored frontiers so find_frontiers() will ignore it
-                continue
 
             # Calculate a score based on distance, unknown count, and direction
             direction_penalty = 0
@@ -374,14 +342,9 @@ class FinderNode(Node):
 
             score = 0.2 * distance + unknown_count  - 1 * angular_penalty # Extra emphasis on direction penalty (wastes a lot of time doing u turns)
 
-            # self.get_logger().info(f"score { score }")
-
             high_score = 0
             # Check if the score is better than the current best
-            if chosen_frontier is None:
-                chosen_frontier = frontier
-                high_score = score
-            elif score > high_score and score > 0:
+            if score > high score:
                 chosen_frontier = frontier
                 high_score = score
 
