@@ -1,6 +1,6 @@
 import time
 import sys
-import casualtydetection.amg8833_i2c_driver as amg8833_i2c
+import casualty_location.amg8833_i2c_driver as amg8833_i2c
 import numpy as np
 import cv2
 import rclpy

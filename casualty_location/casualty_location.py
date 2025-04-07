@@ -1,9 +1,11 @@
 import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import OccupancyGrid
+from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import NavigateToPose
 from rclpy.action import ActionClient
+from scipy.interpolate import interp1d
 import numpy as np
 from collections import deque
 from tf_transformations import euler_from_quaternion, quaternion_from_euler
@@ -11,6 +13,7 @@ from geometry_msgs.msg import Quaternion
 from nav_msgs.msg import Odometry
 import matplotlib.pyplot as plt
 import math
+
 
 SENSOR_FOV = 60.0  # Field of view in degrees
 
@@ -29,6 +32,7 @@ class FinderNode(Node):
 
         self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, 10)
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
+        self.ir_sub = self.create_subscription(String, '/ir_data', self.ir_callback, 10)
 
         self.nav_to_pose_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
 
@@ -40,10 +44,13 @@ class FinderNode(Node):
         self.visited_frontiers = set()
         self.ignored_frontiers = []
         self.previous_frontier = None
+        
+        self.latest_ir_data = None
 
         self.fig, self.ax = None, None
         self.robot_marker, self.robot_arrow = None, None
         plt.ion()
+
 
         self.explore_timer = self.create_timer(5.0, self.explore)
 
@@ -75,8 +82,21 @@ class FinderNode(Node):
 
         self.pose_received = True
         self.pose_data = msg
-        self.paint_wall()
-        self.update_plot()
+        #self.paint_wall()
+        #self.update_plot()
+
+    def ir_callback(self,msg):
+        try:
+            ir_values = eval(msg.data)
+            self.latest_ir_data = ir_values
+            self.paint_wall()
+            self.update_plot()
+            #self.get_logger().info(f"{ir_values}")
+        except Exception as e:
+            self.get_logger().error(f"Failed to parse IR data: {e}")
+
+        
+
 
     def init_plot(self):
         if not self.map_received:
@@ -120,8 +140,11 @@ class FinderNode(Node):
         start_angle = math.degrees(self.robot_yaw) - SENSOR_FOV / 2
         end_angle = math.degrees(self.robot_yaw) + SENSOR_FOV / 2
         num_rays = int(SENSOR_FOV * 2)
-
-        interpolated_data = [25] * num_rays
+        
+        data = self.latest_ir_data
+        x = np.linspace(0, len(data) - 1, len(data))  # Indices of the input data
+        interpolator = interp1d(x, data, kind='linear', fill_value='extrapolate')  # Linear interpolation
+        interpolated_data = interpolator(np.linspace(0, len(data) - 1, num_rays))  # Interpolated data
         angles = np.linspace(start_angle, end_angle, num_rays)
 
         for idx, angle in enumerate(angles):
