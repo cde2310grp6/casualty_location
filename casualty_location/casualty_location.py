@@ -17,6 +17,10 @@ from nav2_msgs.action import Spin
 from rclpy.duration import Duration
 import cv2
 
+# for mission control
+from custom_msg_srv.msg import CasualtySaveStatus, CasualtyLocateStatus
+from custom_msg_srv.srv import StartCasualtyService
+
 SENSOR_FOV = 60.0  # Field of view in degrees
 POSE_CACHE_SIZE = 100  # Number of poses to keep in the cache
 ODOM_RATE = 20.0 # Rate of odometry updates in Hz
@@ -86,8 +90,30 @@ class FinderNode(Node):
         plt.ion()
 
 
-        self.explore_timer = self.create_timer(5.0, self.explore)
+        # service for mission_control to initiate casualty_location
+        self.start_casualty_service = self.create_service(StartCasualtyService, 'casualty_state', self.start_casualty_callback)
+        self.mission_state = "STOPPED"
 
+        # topic to tell mission_control when casualty_location complete
+        self.cas_locate_pub = self.create_publisher(CasualtyLocateStatus, 'casualty_found', 10)
+
+    def start_casualty_callback(self, request, response):
+        if request.state == "STOPPED":
+            self.mission_state = "STOPPED"
+            try:
+                self.explore_timer.cancel()
+            except:
+                pass
+        elif request.state == "LOCATE":
+            self.mission_state = "LOCATE"
+            self.explore_timer = self.create_timer(5.0, self.explore)
+        elif request.state == "SAVE":
+            self.mission_state = "SAVE"
+            # TODO: DO SAVE CASUALTY ACTIONS
+            # leave blank if casualty saving will be done in a different node
+            pass
+        return response
+    
     def map_callback(self, msg):
         self.map_data = msg
         origin_x = self.map_data.info.origin.position.x
@@ -182,6 +208,11 @@ class FinderNode(Node):
         self.fig.canvas.flush_events()
 
     def paint_wall(self):
+        # mission_control
+        # do not proceed if not in LOCATE state
+        if self.mission_state != "LOCATE":
+            return
+
         if not self.map_received or not self.pose_cache_full or not self.origin_cache_full:
             return
 
@@ -423,6 +454,12 @@ class FinderNode(Node):
             self.get_logger().info("No frontiers found. Exploration complete!")
             self.find_centroids()
             self.exploring = False
+
+            # update mission_control
+            msg = CasualtyLocateStatus()
+            msg.all_casualties_found = True
+            self.cas_locate_pub.publish(msg)
+
             return
 
         # Choose the closest frontier
