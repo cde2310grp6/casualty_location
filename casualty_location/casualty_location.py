@@ -13,14 +13,15 @@ from geometry_msgs.msg import Quaternion
 from nav_msgs.msg import Odometry
 import matplotlib.pyplot as plt
 import math
-import array
+from nav2_msgs.action import Spin
+from rclpy.duration import Duration
 
 SENSOR_FOV = 60.0  # Field of view in degrees
-POSE_CACHE_SIZE = 10  # Number of poses to keep in the cache
-ODOM_RATE = 10.0 # Rate of odometry updates in Hz
+POSE_CACHE_SIZE = 100  # Number of poses to keep in the cache
+ODOM_RATE = 29.0 # Rate of odometry updates in Hz
 ORIGIN_CACHE_SIZE = 1 # Number of origin poses to keep in the cache
 MAP_RATE = 0.5 # Rate of map updates in Hz
-DELAY_IR = 0.0  # Delay in seconds for IR data processing
+DELAY_IR = 0.5  # Delay in seconds for IR data processing
 
 GAZEBO = True  # Set to True if running in Gazebo simulation
 
@@ -55,6 +56,7 @@ class FinderNode(Node):
             self.latest_ir_data = [20] * 8
 
         self.nav_to_pose_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
+        self.spin_client = ActionClient(self, Spin, 'spin')
 
         self.robot_position = (0, 0)
         self.robot_yaw = 0.0
@@ -65,7 +67,7 @@ class FinderNode(Node):
         self.origin_cache_full = False
         self.resolution = 0.0
         self.pose_index = round(POSE_CACHE_SIZE - DELAY_IR * ODOM_RATE -1) # Index of the pose to use for navigation
-        self.origin_index = round(ORIGIN_CACHE_SIZE - DELAY_IR * MAP_RATE -1) # Index of the origin to use for navigation
+        self.origin_index = 0 #round(ORIGIN_CACHE_SIZE - DELAY_IR * MAP_RATE -1) # Index of the origin to use for navigation
 
         self.visited_frontiers = set()
         self.ignored_frontiers = []
@@ -173,8 +175,8 @@ class FinderNode(Node):
         if not self.map_received or not self.pose_cache_full or not self.origin_cache_full:
             return
 
-        cy = int((self.robot_position[0] - self.origin[0]) / self.resolution)
-        cx = int((self.robot_position[1] - self.origin[1]) / self.resolution)
+        cy = int((self.robot_cache[self.pose_index].x - self.origin[0]) / self.resolution)
+        cx = int((self.robot_cache[self.pose_index].y - self.origin[1]) / self.resolution)
         rows, cols = self.map_data.info.height, self.map_data.info.width
 
         start_angle = math.degrees(self.robot_cache[self.pose_index].yaw) - SENSOR_FOV / 2
@@ -223,6 +225,18 @@ class FinderNode(Node):
                 else:
                     break
 
+    def spin_360(self):
+        if not self.spin_client.wait_for_server(timeout_sec=5.0):
+            self.get_logger().error("Spin action server not available!")
+            return
+
+        spin_goal = Spin.Goal()
+        spin_goal.target_yaw = 2 * math.pi  # 360 degrees
+        spin_goal.time_allowance = Duration(seconds=15.0).to_msg()
+
+        self.get_logger().info("Sending spin goal (360 degrees)...")
+        future = self.spin_client.send_goal_async(spin_goal)
+        future.add_done_callback(self.spin_response_callback)
 
     def navigate_to(self, x, y):
         self.nav_in_progress = True
@@ -264,6 +278,22 @@ class FinderNode(Node):
             self.get_logger().info(f"Navigation result: {result}")
         except Exception as e:
             self.get_logger().error(f"Navigation failed: {e}")
+        self.spin_360()
+        #self.nav_in_progress = False
+
+    def spin_response_callback(self, future):
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().warn('Spin goal rejected')
+            return
+
+        self.get_logger().info('Spin goal accepted')
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(self.spin_result_callback)
+
+    def spin_result_callback(self, future):
+        result = future.result().result
+        self.get_logger().info(f"Spin completed with result: {result}")
         self.nav_in_progress = False
 
     def find_frontiers(self, map_array):
