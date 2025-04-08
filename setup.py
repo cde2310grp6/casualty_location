@@ -21,6 +21,7 @@ setup(
     entry_points={
         'console_scripts': [
             'casualty_location = casualty_location.casualty_location:main',
+            'casualty_saver = casualty_location.casualty_saver:main',
             'ir_pub = casualty_location.ir_node:main',
         ],
     },
