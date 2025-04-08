@@ -15,13 +15,16 @@ import matplotlib.pyplot as plt
 import math
 from nav2_msgs.action import Spin
 from rclpy.duration import Duration
+import cv2
 
 SENSOR_FOV = 60.0  # Field of view in degrees
 POSE_CACHE_SIZE = 100  # Number of poses to keep in the cache
 ODOM_RATE = 20.0 # Rate of odometry updates in Hz
 ORIGIN_CACHE_SIZE = 1 # Number of origin poses to keep in the cache
 MAP_RATE = 0.5 # Rate of map updates in Hz
-DELAY_IR = 0.5  # Delay in seconds for IR data processing
+DELAY_IR = 0.2  # Delay in seconds for IR data processing
+
+CASUALTY_COUNT = 3 # Number of casualties to find
 
 GAZEBO = True  # Set to True if running in Gazebo simulation
 
@@ -45,6 +48,7 @@ class FinderNode(Node):
         self.grid = None
         self.thermal_confidence = None
         self.nav_in_progress = False
+        self.exploring = True
 
         self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, 10)
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
@@ -67,11 +71,15 @@ class FinderNode(Node):
         self.origin_cache_full = False
         self.resolution = 0.0
         self.pose_index = round(POSE_CACHE_SIZE - DELAY_IR * ODOM_RATE -1) # Index of the pose to use for navigation
-        self.origin_index = 0 #round(ORIGIN_CACHE_SIZE - DELAY_IR * MAP_RATE -1) # Index of the origin to use for navigation
+        self.origin_index = round(ORIGIN_CACHE_SIZE - DELAY_IR * MAP_RATE -1) # Index of the origin to use for navigation
 
         self.visited_frontiers = set()
         self.ignored_frontiers = []
         self.previous_frontier = None
+
+        self.contours = []
+        self.centroids = []
+        self.binary = None
 
         self.fig, self.ax = None, None
         self.robot_marker, self.robot_arrow = None, None
@@ -119,6 +127,8 @@ class FinderNode(Node):
             self.update_plot()
 
     def ir_callback(self,msg):
+        if not self.exploring:
+            return
         try:
             ir_values = eval(msg.data)
             self.latest_ir_data = ir_values
@@ -126,7 +136,7 @@ class FinderNode(Node):
             self.update_plot()
             #self.get_logger().info(f"{ir_values}")
         except Exception as e:
-            self.get_logger().error(f"Failed to parse IR data: {e}")
+            self.get_logger().warning(f"Failed to parse IR data: {e}")
 
     def clean_pose_cache(self):
         # Remove old poses from the cache
@@ -199,7 +209,7 @@ class FinderNode(Node):
                 col = int(round(cy + step * dx))
 
                 if 0 <= row < rows and 0 <= col < cols:
-                    if self.grid[row][col] != 0:
+                    if self.grid[row][col] > 0:
                         # Assign value to the current cell
                         if self.grid[row][col] > 90:
                             self.grid[row][col] = interpolated_data[idx]
@@ -218,7 +228,7 @@ class FinderNode(Node):
 
                                 # Ensure the neighbor is within bounds
                                 if 0 <= adj_row < rows and 0 <= adj_col < cols:
-                                    if self.grid[adj_row][adj_col] != 0:
+                                    if self.grid[adj_row][adj_col] > 0:
                                         # Update non-zero neighboring cells
                                         self.grid[adj_row][adj_col] = (self.grid[adj_row][adj_col] + interpolated_data[idx]) / 2
                         break
@@ -391,6 +401,9 @@ class FinderNode(Node):
     
 
     def explore(self):
+        if not self.exploring:
+            return
+
         if self.nav_in_progress:
             self.get_logger().info("Navigation in progress, cannot choose frontier")
             return None
@@ -398,7 +411,7 @@ class FinderNode(Node):
         if self.map_data is None:
             self.get_logger().warning("No map data available")
             return
-
+        
         # Convert map to numpy array
         map_array = np.array(self.map_data.data).reshape(
             (self.map_data.info.height, self.map_data.info.width))
@@ -408,6 +421,8 @@ class FinderNode(Node):
 
         if not frontiers:
             self.get_logger().info("No frontiers found. Exploration complete!")
+            self.find_centroids()
+            self.exploring = False
             return
 
         # Choose the closest frontier
@@ -415,6 +430,8 @@ class FinderNode(Node):
 
         if not chosen_frontier:
             self.get_logger().warning("No frontiers to explore")
+            self.find_centroids()
+            self.exploring = False
             return
 
         # Convert the chosen frontier to world coordinates
@@ -423,6 +440,99 @@ class FinderNode(Node):
 
         # Navigate to the chosen frontier
         self.navigate_to(goal_x, goal_y)
+
+    def threshold(self,rows,cols,thresh,binary):
+        for row in range(rows):
+            for i in range(cols):
+                val = self.grid[row][i]
+                if val >= thresh:
+                    binary[row][i] = 1
+                else:
+                    binary[row][i] = 0
+    
+    def find_centroids(self):
+        # Remove unassigned cells
+        rows = self.grid.shape[0]
+        cols = self.grid.shape[1]
+        for i in range(rows):
+            for j in range(rows):
+                if self.grid[i][j] > 90:
+                    self.grid[i][j] = 0
+        upper_threshold = 100.0
+        lower_threshold = 0.0
+        middle_threshold = (upper_threshold + lower_threshold) / 2
+        tries = 0
+        self.binary = np.zeros((rows, cols), dtype=np.uint8)  # Ensure it's uint8
+        while len(self.contours) != CASUALTY_COUNT and tries < 100:
+            tries += 1
+            if len(self.contours) < CASUALTY_COUNT:
+                upper_threshold = middle_threshold
+                middle_threshold = (upper_threshold + lower_threshold) / 2
+                self.threshold(rows, cols, middle_threshold, self.binary)
+            elif len(self.contours) > CASUALTY_COUNT:
+                lower_threshold = middle_threshold
+                middle_threshold = (upper_threshold + lower_threshold) / 2
+                self.threshold(rows, cols, middle_threshold, self.binary)
+            self.contours, _ = cv2.findContours(self.binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if tries >= 100:
+            self.get_logger().info("Failed to find casualties")
+            return
+        self.get_logger().info(f"Found {len(self.contours)} casualties")
+        for contour in self.contours:
+            M = cv2.moments(contour)
+            if M["m00"] != 0:
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
+                self.centroids.append((cx, cy))
+        self.get_logger().info(f"Centroids: {self.centroids}")
+        
+
+    def threshold(self, grid, thresh):
+        binary = np.zeros_like(grid, dtype=np.uint8)
+        rows, cols = grid.shape
+        for row in range(rows):
+            for col in range(cols):
+                binary[row][col] = 255 if grid[row][col] >= thresh else 0
+        return binary
+
+    def find_centroids(self):
+        self.grid = np.where(self.grid > 90, 0, self.grid)
+        upper_threshold = 100.0
+        lower_threshold = 0.0
+        middle_threshold = (upper_threshold + lower_threshold) / 2
+        tries = 0
+        contours = []
+
+        while tries < 100:
+            binary = self.threshold(self.grid, middle_threshold)
+            self.contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            if len(contours) == CASUALTY_COUNT:
+                break
+            elif len(contours) < CASUALTY_COUNT:
+                upper_threshold = middle_threshold
+            else:  # more than needed
+                lower_threshold = middle_threshold
+
+            middle_threshold = (upper_threshold + lower_threshold) / 2
+            tries += 1
+
+        if tries >= 100:
+            self.logger().info("Failed to find casualties.")
+            return []
+
+        self.logger().info("Found casualties.")
+
+        centroids = []
+        for contour in contours:
+            M = cv2.moments(contour)
+            if M["m00"] != 0:
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
+                centroids.append((cx, cy))
+
+        self.logger().info(f"Centroids: {centroids}")
+        return centroids
 
 
 def main(args=None):
