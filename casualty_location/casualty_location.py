@@ -18,7 +18,7 @@ from rclpy.duration import Duration
 
 SENSOR_FOV = 60.0  # Field of view in degrees
 POSE_CACHE_SIZE = 100  # Number of poses to keep in the cache
-ODOM_RATE = 29.0 # Rate of odometry updates in Hz
+ODOM_RATE = 20.0 # Rate of odometry updates in Hz
 ORIGIN_CACHE_SIZE = 1 # Number of origin poses to keep in the cache
 MAP_RATE = 0.5 # Rate of map updates in Hz
 DELAY_IR = 0.5  # Delay in seconds for IR data processing
