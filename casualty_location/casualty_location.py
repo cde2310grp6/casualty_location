@@ -16,13 +16,13 @@ import math
 import array
 
 SENSOR_FOV = 60.0  # Field of view in degrees
-POSE_CACHE_SIZE = 100  # Number of poses to keep in the cache
+POSE_CACHE_SIZE = 10  # Number of poses to keep in the cache
 ODOM_RATE = 10.0 # Rate of odometry updates in Hz
-ORIGIN_CACHE_SIZE = 10 # Number of origin poses to keep in the cache
+ORIGIN_CACHE_SIZE = 1 # Number of origin poses to keep in the cache
 MAP_RATE = 0.5 # Rate of map updates in Hz
-DELAY_IR = 0.5  # Delay in seconds for IR data processing
+DELAY_IR = 0.0  # Delay in seconds for IR data processing
 
-GAZEBO = False  # Set to True if running in Gazebo simulation
+GAZEBO = True  # Set to True if running in Gazebo simulation
 
 class BotPose(object):
     def __init__(self, x, y, yaw):
@@ -108,7 +108,8 @@ class FinderNode(Node):
 
         self.pose_received = True
         pose = BotPose(x, y, yaw)
-        self.robot_cache.push(pose)
+        self.robot_cache.append(pose)
+        #self.get_logger().info(f"Robot Pose: {pose}")
         self.clean_pose_cache()
 
         if GAZEBO:
@@ -169,11 +170,11 @@ class FinderNode(Node):
         self.fig.canvas.flush_events()
 
     def paint_wall(self):
-        if not self.map_received or not self.pose_cache_full:
+        if not self.map_received or not self.pose_cache_full or not self.origin_cache_full:
             return
 
-        cy = int((self.robot_cache[self.pose_index].x - self.origin_cache[self.origin_index].x) / self.resolution)
-        cx = int((self.robot_cache[self.pose_index].y - self.origin_cache[self.origin_index].y) / self.resolution)
+        cy = int((self.robot_position[0] - self.origin[0]) / self.resolution)
+        cx = int((self.robot_position[1] - self.origin[1]) / self.resolution)
         rows, cols = self.map_data.info.height, self.map_data.info.width
 
         start_angle = math.degrees(self.robot_cache[self.pose_index].yaw) - SENSOR_FOV / 2
@@ -344,7 +345,7 @@ class FinderNode(Node):
 
             high_score = 0
             # Check if the score is better than the current best
-            if score > high score:
+            if score > high_score:
                 chosen_frontier = frontier
                 high_score = score
 
