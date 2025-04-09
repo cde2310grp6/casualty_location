@@ -18,7 +18,7 @@ from rclpy.duration import Duration
 import cv2
 
 # for mission control
-from custom_msg_srv.msg import CasualtySaveStatus, CasualtyLocateStatus
+from custom_msg_srv.msg import CasualtySaveStatus, CasualtyLocateStatus, ArrayCasualtyPos
 from custom_msg_srv.srv import StartCasualtyService
 
 SENSOR_FOV = 60.0  # Field of view in degrees
@@ -81,8 +81,7 @@ class FinderNode(Node):
         self.ignored_frontiers = []
         self.previous_frontier = None
 
-        self.contours = []
-        self.centroids = []
+        self.casualties = []
         self.binary = None
 
         self.fig, self.ax = None, None
@@ -96,6 +95,7 @@ class FinderNode(Node):
 
         # topic to tell mission_control when casualty_location complete
         self.cas_locate_pub = self.create_publisher(CasualtyLocateStatus, 'casualty_found', 10)
+        self.cas_pose_pub = self.create_publisher(ArrayCasualtyPos, 'casualty_positions', 10)
 
     def start_casualty_callback(self, request, response):
         if request.state == "STOPPED":
@@ -115,13 +115,19 @@ class FinderNode(Node):
         return response
     
     def map_callback(self, msg):
+        def clean_origin_cache(self):
+        # Remove old origins from the cache
+            if len(self.origin_cache) > ORIGIN_CACHE_SIZE:
+                self.origin_cache.pop(0)
+                self.origin_cache_full = True
+
         self.map_data = msg
         origin_x = self.map_data.info.origin.position.x
         origin_y = self.map_data.info.origin.position.y
         self.origin = (origin_x, origin_y)
         self.resolution = self.map_data.info.resolution
         self.origin_cache.append(self.origin)
-        self.clean_origin_cache()
+        clean_origin_cache()
 
         if not self.map_received:
             self.map_received = True
@@ -133,6 +139,12 @@ class FinderNode(Node):
             self.init_plot()
 
     def odom_callback(self, msg):
+        def clean_pose_cache(self):
+            # Remove old poses from the cache
+            if len(self.robot_cache) > POSE_CACHE_SIZE:
+                self.robot_cache.pop(0)
+                self.pose_cache_full = True
+    
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
         self.robot_position = (x, y)
@@ -146,7 +158,7 @@ class FinderNode(Node):
         pose = BotPose(x, y, yaw)
         self.robot_cache.append(pose)
         #self.get_logger().info(f"Robot Pose: {pose}")
-        self.clean_pose_cache()
+        clean_pose_cache()
 
         if GAZEBO:
             self.paint_wall()
@@ -163,18 +175,6 @@ class FinderNode(Node):
             #self.get_logger().info(f"{ir_values}")
         except Exception as e:
             self.get_logger().warning(f"Failed to parse IR data: {e}")
-
-    def clean_pose_cache(self):
-        # Remove old poses from the cache
-        if len(self.robot_cache) > POSE_CACHE_SIZE:
-            self.robot_cache.pop(0)
-            self.pose_cache_full = True
-
-    def clean_origin_cache(self):
-        # Remove old origins from the cache
-        if len(self.origin_cache) > ORIGIN_CACHE_SIZE:
-            self.origin_cache.pop(0)
-            self.origin_cache_full = True
 
     def init_plot(self):
         if not self.map_received:
@@ -235,7 +235,7 @@ class FinderNode(Node):
             dx = math.cos(rad_angle)
             dy = math.sin(rad_angle)
 
-            for step in range(1, 300):
+            for step in range(1, 100):
                 row = int(round(cx + step * dy))
                 col = int(round(cy + step * dx))
 
@@ -246,24 +246,6 @@ class FinderNode(Node):
                             self.grid[row][col] = interpolated_data[idx]
                         #else:
                             #self.grid[row][col] = (self.grid[row][col] + interpolated_data[idx]) / 2
-                        '''
-                        # Update the adjacent cells (neighbors)
-                        for d_row in [-1, 0, 1]:
-                            for d_col in [-1, 0, 1]:
-                                # Skip the current cell itself
-                                if d_row == 0 and d_col == 0:
-                                    continue
-                                
-                                adj_row = row + d_row
-                                adj_col = col + d_col
-
-                                # Ensure the neighbor is within bounds
-                                if 0 <= adj_row < rows and 0 <= adj_col < cols:
-                                    if self.grid[adj_row][adj_col] > 0:
-                                        # Update non-zero neighboring cells
-                                        self.grid[adj_row][adj_col] = (self.grid[adj_row][adj_col] + interpolated_data[idx]) / 2
-                        break
-                        '''
                 else:
                     break
 
@@ -452,7 +434,7 @@ class FinderNode(Node):
 
         if not frontiers:
             self.get_logger().info("No frontiers found. Exploration complete!")
-            self.find_centroids()
+            self.find_casualties()
             self.exploring = False
 
             # update mission_control
@@ -468,7 +450,7 @@ class FinderNode(Node):
 
         if not chosen_frontier:
             self.get_logger().warning("No frontiers to explore")
-            self.find_centroids()
+            self.find_casualties()
             self.exploring = False
             return
 
@@ -479,66 +461,79 @@ class FinderNode(Node):
         # Navigate to the chosen frontier
         self.navigate_to(goal_x, goal_y)
 
-    def threshold(self, grid, thresh):
-        binary = np.zeros_like(grid, dtype=np.uint8)
-        rows, cols = grid.shape
-        for row in range(rows):
-            for col in range(cols):
-                binary[row][col] = 255 if grid[row][col] >= thresh else 0
-        return binary
-
-    def find_centroids(self):
+    def find_casualties(self):
         self.grid = np.where(self.grid > 90, 0, self.grid)  # Ignore unexplored/wall cells
-        upper_threshold = 30
-        lower_threshold = 20
-        middle_threshold = (upper_threshold + lower_threshold) / 2
-        tries = 0
 
-        while tries < 100:
-            binary = self.threshold(self.grid, middle_threshold)
-            self.binary = binary  # Store for external inspection or debugging
+        def find_top_hotspots(grid_array, count=CASUALTY_COUNT, neighborhood=2, suppress_radius=10):
+            rows, cols = grid_array.shape
+            grid_avg = np.zeros_like(grid_array)
 
-            contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            # Calculate local average around each pixel
+            for row in range(rows):
+                for col in range(cols):
+                    total = 0
+                    div = 0
+                    for offset_i in range(-neighborhood, neighborhood + 1):
+                        for offset_j in range(-neighborhood, neighborhood + 1):
+                            i, j = row + offset_i, col + offset_j
+                            if 0 <= i < rows and 0 <= j < cols:
+                                if grid_array[i][j] > 10:
+                                    total += grid_array[i][j]
+                                    div += 1
+                    grid_avg[row][col] = total / div if div != 0 else 0
 
-            # Filter out very small contours
-            filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 5]
+            hotspots = []
 
-            if len(filtered_contours) == CASUALTY_COUNT:
-                self.get_logger().info(f"Found {len(filtered_contours)} potential casualties.")
-                self.contours = filtered_contours
-                self.centroids = []
+            # Find top 'count' hotspots
+            for _ in range(count):
+                idx = np.argmax(grid_avg)
+                hottest_i = idx // cols
+                hottest_j = idx % cols
+                hottest_value = grid_avg[hottest_i][hottest_j]
+                hotspots.append((hottest_i, hottest_j, hottest_value))
 
-                for cnt in filtered_contours:
-                    M = cv2.moments(cnt)
-                    if M['m00'] != 0:
-                        cX = int(M['m10'] / M['m00'])
-                        cY = int(M['m01'] / M['m00'])
-                        self.centroids.append((cX, cY))
-                        self.get_logger().info(f"Casualty at map index: ({cY}, {cX})")
-                    else:
-                        self.get_logger().warning("Zero moment encountered while finding centroid")
+                # Suppress surrounding region
+                for offset_i in range(-suppress_radius, suppress_radius + 1):
+                    for offset_j in range(-suppress_radius, suppress_radius + 1):
+                        i, j = hottest_i + offset_i, hottest_j + offset_j
+                        if 0 <= i < rows and 0 <= j < cols:
+                            grid_avg[i][j] = 0
 
-                # Optionally: navigate to each casualty location here
-                return
+            return hotspots
 
-            elif len(filtered_contours) < CASUALTY_COUNT:
-                upper_threshold = middle_threshold
-            else:
-                lower_threshold = middle_threshold
+        # Find hotspots
+        hotspots = find_top_hotspots(self.grid)
 
-            middle_threshold = (upper_threshold + lower_threshold) / 2
-            tries += 1
+        if len(hotspots) == CASUALTY_COUNT:
+            for hotspot in hotspots:
+                cY, cX, value = hotspot
+                self.get_logger().info(f"Casualty at map index: ({cY}, {cX}) with value: {value}")
+                # Convert to world coordinates
+                cas_x = cX * self.map_data.info.resolution + self.map_data.info.origin.position.x
+                cas_y = cY * self.map_data.info.resolution + self.map_data.info.origin.position.y
+                self.casualties.append((cas_x, cas_y))
+                self.publish_casualties()
 
-        self.get_logger().warning("Could not find desired number of casualties after 100 tries")
-        self.show_binary_map(binary)
+            return
 
-    def show_binary_map(self, binary_map):
-        plt.figure(figsize=(8, 8))
-        plt.title("Binary Thresholded Thermal Map")
-        plt.imshow(binary_map, cmap='gray', origin='lower')
-        plt.axis('on')
-        plt.grid(False)
-        plt.show()
+        self.get_logger().warning("Could not find the desired number of casualties")
+
+    def publish_casualties(self):
+        msg = ArrayCasualtyPos()
+
+        for x, y in self.casualties:
+            pose = PoseStamped()
+            pose.header.stamp = self.get_clock().now().to_msg()
+            pose.header.frame_id = "map"
+            pose.pose.position.x = float(x)
+            pose.pose.position.y = float(y)
+            pose.pose.position.z = 0.0
+            pose.pose.orientation.w = 1.0  # Identity quaternion
+
+            msg.casualties.append(pose)
+
+        self.cas_pose_pub.publish(msg)
+        self.get_logger().info(f"Published {len(msg.casualties)} casualties.")
 
 def main(args=None):
     rclpy.init(args=args)
