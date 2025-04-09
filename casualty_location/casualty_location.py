@@ -533,6 +533,7 @@ class FinderNode(Node):
             msg.casualties.append(pose)
 
         self.cas_pose_pub.publish(msg)
+        self.cas_locate_pub.publish(CasualtyLocateStatus(all_casualties_found=True))
         self.get_logger().info(f"Published {len(msg.casualties)} casualties.")
 
 def main(args=None):
