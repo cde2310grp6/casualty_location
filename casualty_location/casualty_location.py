@@ -323,15 +323,20 @@ class FinderNode(Node):
                 row = int(round(cx + step * dy))
                 col = int(round(cy + step * dx))
 
+<<<<<<< HEAD
                 #if 0 <= row < rows - 1 and 0 <= col < cols - 1:
                 if row in [i for i in range(rows)] and col in [j for j in range(cols)]:
                     if self.grid[row][col] > 0:
+=======
+                if 0 <= row < rows and 0 <= col < cols:
+                    if self.grid[row][col] > 10:
+>>>>>>> origin/main
                         # Assign value to the current cell
                         if self.grid[row][col] > 90:
                             self.grid[row][col] = interpolated_data[idx]
-                            break
                         #else:
                             #self.grid[row][col] = (self.grid[row][col] + interpolated_data[idx]) / 2
+                        break
                 else:
                     break
 
