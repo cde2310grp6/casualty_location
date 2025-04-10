@@ -28,9 +28,9 @@ ORIGIN_CACHE_SIZE = 1 # Number of origin poses to keep in the cache
 MAP_RATE = 0.5 # Rate of map updates in Hz
 DELAY_IR = 0.7  # Delay in seconds for IR data processing
 
-CASUALTY_COUNT = 2 # Number of casualties to find
+CASUALTY_COUNT = 1 # Number of casualties to find
 
-GAZEBO = True # Set to True if running in Gazebo simulation
+GAZEBO = False # Set to True if running in Gazebo simulation
 
 class BotPose(object):
     def __init__(self, x, y, yaw):
@@ -323,7 +323,8 @@ class FinderNode(Node):
                 row = int(round(cx + step * dy))
                 col = int(round(cy + step * dx))
 
-                if 0 <= row < rows and 0 <= col < cols:
+                #if 0 <= row < rows - 1 and 0 <= col < cols - 1:
+                if row in [i for i in range(rows)] and col in [j for j in range(cols)]:
                     if self.grid[row][col] > 0:
                         # Assign value to the current cell
                         if self.grid[row][col] > 90:
