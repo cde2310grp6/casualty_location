@@ -12,6 +12,9 @@ from geometry_msgs.msg import Quaternion
 from nav_msgs.msg import Odometry
 import math
 
+# for map res, for rviz marker
+from nav_msgs.msg import OccupancyGrid
+
 from time import sleep
 
 # for mission control
@@ -23,6 +26,8 @@ from std_srvs.srv import Trigger
 
 # for casualty locations
 from custom_msg_srv.msg import ArrayCasualtyPos
+
+import casualty_location.rviz_marker as rviz_marker
 
 
 
@@ -50,6 +55,15 @@ class CasualtySaver(Node):
         # get self.robot_position
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
 
+        # get map res for rviz marker
+        self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, 10)
+        self.map_data = None
+
+        # for showing casualty locations in rviz
+        self.cas_marker = rviz_marker.RvizMarker()
+
+
+
         self.saving_in_progress = False
         self.robot_position = (0, 0)
 
@@ -73,9 +87,24 @@ class CasualtySaver(Node):
         y = msg.pose.pose.position.y
         self.robot_position = (x, y)
 
+
+    def map_callback(self, msg):
+        if not self.map_data:
+            self.cas_marker.update_map_consts(
+                msg.info.resolution,
+                msg.info.origin.position.x, msg.info.origin.position.y)
+                
+        self.map_data = msg
+
     def casualty_callback(self, msg):
         self.get_logger().info("Received casualty locations")
         self.waypoints = msg.casualties
+
+        # show casualties in rviz
+        for cas in self.waypoints:
+            disp_cas = []
+            disp_cas.append( (cas.pose.position.x, cas.pose.position.y) )
+            self.cas_marker.publish_marker_array(disp_cas)
 
     def launch_now(self):
         self.get_logger().info("calling launcher")
@@ -97,16 +126,17 @@ class CasualtySaver(Node):
 
     # this function could fail if the casualty_loc is not published in time
     def save_casualty(self):
-        if not self.saving_in_progress and len(self.waypoints) > 0:
-            self.navigate_to(self.waypoints.pop(0))
-            self.saving_in_progress = True
-        elif len(self.waypoints) == 0:
-            # all casualties have been saved
-            self.get_logger().info("All casualties saved.")
-            self.saving_in_progress = False
-            self.mission_state = "STOPPED"
-            self.save_timer.cancel()
-            self.save_timer.destroy()
+        if not self.saving_in_progress:
+            if len(self.waypoints) > 0:
+                self.navigate_to(self.waypoints.pop(0)) #TODO: save location of current goal casualty to point towards it before launch
+                self.saving_in_progress = True
+            elif len(self.waypoints) == 0:
+                # all casualties have been saved
+                self.get_logger().info("All casualties saved.")
+                self.saving_in_progress = False
+                self.mission_state = "STOPPED"
+                self.save_timer.cancel()
+                self.save_timer.destroy()
         else:
             pass
             # waiting for current task to be completed...

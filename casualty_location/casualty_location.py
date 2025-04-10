@@ -30,7 +30,7 @@ DELAY_IR = 0.7  # Delay in seconds for IR data processing
 
 CASUALTY_COUNT = 2 # Number of casualties to find
 
-GAZEBO = False # Set to True if running in Gazebo simulation
+GAZEBO = True # Set to True if running in Gazebo simulation
 
 class BotPose(object):
     def __init__(self, x, y, yaw):
@@ -95,7 +95,7 @@ class FinderNode(Node):
 
         # topic to tell mission_control when casualty_location complete
         self.cas_locate_pub = self.create_publisher(CasualtyLocateStatus, 'casualty_found', 10)
-        self.cas_pose_pub = self.create_publisher(ArrayCasualtyPos, 'casualty_positions', 10)
+        self.cas_pose_pub = self.create_publisher(ArrayCasualtyPos, 'casualty_locations', 10)
 
     def start_casualty_callback(self, request, response):
         if request.state == "STOPPED":
@@ -127,7 +127,7 @@ class FinderNode(Node):
         self.origin = (origin_x, origin_y)
         self.resolution = self.map_data.info.resolution
         self.origin_cache.append(self.origin)
-        clean_origin_cache()
+        clean_origin_cache(self)
 
         if not self.map_received:
             self.map_received = True
@@ -158,7 +158,7 @@ class FinderNode(Node):
         pose = BotPose(x, y, yaw)
         self.robot_cache.append(pose)
         #self.get_logger().info(f"Robot Pose: {pose}")
-        clean_pose_cache()
+        clean_pose_cache(self)
 
         if GAZEBO:
             self.paint_wall()
@@ -239,7 +239,11 @@ class FinderNode(Node):
                 row = int(round(cx + step * dy))
                 col = int(round(cy + step * dx))
 
-                if 0 <= row < rows and 0 <= col < cols:
+                grid_rows, grid_cols = self.grid.shape
+                #TODO: this mapping may not be correct! need to double check
+                # idk if row and grid should be compared to self.grid or self.map_data
+
+                if 0 <= row < grid_rows  and 0 <= col < grid_cols:
                     if self.grid[row][col] > 0:
                         # Assign value to the current cell
                         if self.grid[row][col] > 90:
@@ -336,8 +340,12 @@ class FinderNode(Node):
         while queue:
             r, c = queue.popleft()
 
+            grid_rows, grid_cols = self.grid.shape
+            #TODO: this mapping may not be correct! need to double check
+            # idk if row and grid should be compared to self.grid or self.map_data
+
             # Check if this cell is a wall (100) and hasn't been thermally scanned yet
-            if self.grid[r, c] > 90:
+            if 0 <= r < grid_rows and 0 <= c < grid_cols and self.grid[r, c] > 90:
                 neighbors = self.grid[r-1:r+2, c-1:c+2].flatten()
                 if 100 in neighbors and (r, c) not in self.ignored_frontiers:
                     frontiers.append((r, c))
@@ -525,8 +533,9 @@ class FinderNode(Node):
             pose = PoseStamped()
             pose.header.stamp = self.get_clock().now().to_msg()
             pose.header.frame_id = "map"
-            pose.pose.position.x = float(x)
-            pose.pose.position.y = float(y)
+            # convert to map coordinates
+            pose.pose.position.x = x * self.map_data.info.resolution + self.map_data.info.origin.position.x
+            pose.pose.position.y = y * self.map_data.info.resolution + self.map_data.info.origin.position.y
             pose.pose.position.z = 0.0
             pose.pose.orientation.w = 1.0  # Identity quaternion
 
