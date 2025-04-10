@@ -206,6 +206,91 @@ class FinderNode(Node):
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
 
+    def transform_to_valid_goal(self, waypoint):
+
+        self.get_logger().info(f"Transforming waypoint to valid goal: {waypoint.pose.position.x}, {waypoint.pose.position.y}")
+        # Get the dimensions of the occupancy grid
+        rows, cols = self.grid.shape
+
+        def dist_to_closest_wall(self, x, y):
+            """
+            Radiates outward from (x, y) and finds the closest obstacle in self.grid.
+            An obstacle is defined as a cell with a value > 90.
+            
+            Args:
+                x (float): The x-coordinate in world space.
+                y (float): The y-coordinate in world space.
+
+            Returns:
+                float: The distance to the closest obstacle. Returns -1 if no obstacle is found.
+            """
+            if self.grid is None:
+                self.get_logger().error("Occupancy grid is not available.")
+                return -1
+
+            grid_x = int(x)
+            grid_y = int(y)
+
+            # Perform a radial search
+            max_radius = max(rows, cols)  # Limit the search to the size of the grid
+            for radius in range(1, max_radius):
+                for dx in range(-radius, radius + 1):
+                    for dy in range(-radius, radius + 1):
+                        # Skip cells outside the current radius
+                        if abs(dx) != radius and abs(dy) != radius:
+                            continue
+
+                        nx, ny = grid_x + dx, grid_y + dy
+
+                        # Check if the cell is within bounds
+                        if 0 <= nx < cols and 0 <= ny < rows:
+                            # Check if the cell is an obstacle
+                            if self.grid[ny, nx] > 90:
+                                # Calculate the distance to the obstacle
+                                obstacle_x = nx
+                                obstacle_y = ny
+                                distance = math.sqrt((obstacle_x - x) ** 2 + (obstacle_y - y) ** 2)
+                                self.get_logger().info(f"Closest obstacle found at ({obstacle_x}, {obstacle_y}) with distance {distance}")
+                                return distance
+
+            # If no obstacle is found, return -1
+            self.get_logger().warning("No obstacle found within the occupancy grid.")
+            return -1
+
+            ## end of dist to closest wall
+
+        x = waypoint.pose.position.x
+        y = waypoint.pose.position.y
+
+        # Perform a radial search to find a valid goal
+        resolution = self.map_data.info.resolution
+        step_size = resolution  # Move outward in steps of the map resolution
+        max_radius = 150  # Limit the search radius to avoid infinite loops
+
+        # Cardinal directions: (dx, dy) for up, down, left, right
+        directions = [(0, step_size), (0, -step_size), (step_size, 0), (-step_size, 0), (step_size, step_size), (-step_size, -step_size), (step_size, -step_size), (-step_size, step_size)] 
+
+        for radius in range(10, max_radius):
+            for dx, dy in directions:
+                # Move outward in the current direction
+                new_x = x + dx * radius
+                new_y = y + dy * radius
+
+                # Check the distance to the closest wall
+                distance_to_wall = dist_to_closest_wall(self, new_x, new_y)
+                self.get_logger().info(f"Distance to closest wall at ({new_x}, {new_y}): {distance_to_wall}")
+
+                # If the distance exceeds 19, return the current waypoint
+                if 0 < new_x < cols and 0 < new_y < rows and distance_to_wall > 3.0:
+                    self.get_logger().info(f"Valid goal found at ({new_x}, {new_y}) with distance {distance_to_wall}")
+                    waypoint.pose.position.x = new_x
+                    waypoint.pose.position.y = new_y
+                    return waypoint
+
+        # If no valid goal is found, return the original waypoint
+        self.get_logger().warning("No valid goal found within the search radius. Returning the original waypoint.")
+        return waypoint 
+
     def paint_wall(self):
         # mission_control
         # do not proceed if not in LOCATE state
@@ -243,6 +328,7 @@ class FinderNode(Node):
                         # Assign value to the current cell
                         if self.grid[row][col] > 90:
                             self.grid[row][col] = interpolated_data[idx]
+                            break
                         #else:
                             #self.grid[row][col] = (self.grid[row][col] + interpolated_data[idx]) / 2
                 else:
@@ -261,13 +347,51 @@ class FinderNode(Node):
         future = self.spin_client.send_goal_async(spin_goal)
         future.add_done_callback(self.spin_response_callback)
 
+
+    #########################################################################################3
+    # near duplicate of spin_360, but spins to face the target
+
+    def spin_face_target(self):
+        if not self.spin_client.wait_for_server(timeout_sec=5.0):
+            self.get_logger().error("Spin action server not available!")
+            return
+
+        robot_x, robot_y = self.robot_position
+        yaw = math.atan2(y - robot_y, x - robot_x)  # Direct the robot towards the target
+       
+        spin_goal = Spin.Goal()
+        spin_goal.target_yaw = yaw  # 360 degrees
+        spin_goal.time_allowance = Duration(seconds=6.0).to_msg()
+
+        self.get_logger().info("Sending spin goal (360 degrees)...")
+        future = self.spin_client.send_goal_async(spin_goal)
+        future.add_done_callback(self.spin_face_target_callback)
+
+    def spin_face_target_callback(self, future):
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().warn('Spin goal rejected')
+            return
+
+        self.get_logger().info('Spin goal accepted')
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(self.spin_face_target_result)
+
+    def spin_face_target_result(self, future):
+        result = future.result().result
+        self.get_logger().info(f"Spin completed with result: {result}")
+        self.nav_in_progress = False
+
+    #########################################################################################3
+        
+
     def navigate_to(self, x, y):
         self.nav_in_progress = True
         goal_msg = PoseStamped()
         goal_msg.header.frame_id = 'map'
         goal_msg.header.stamp = self.get_clock().now().to_msg()
-        goal_msg.pose.position.x = x
-        goal_msg.pose.position.y = y
+        goal_msg.pose.position.x = x * self.map_data.info.resolution + self.map_data.info.origin.position.x
+        goal_msg.pose.position.y = y * self.map_data.info.resolution + self.map_data.info.origin.position.y
 
         # Compute yaw to face the target (low confidence area)
         robot_x, robot_y = self.robot_position
@@ -423,6 +547,14 @@ class FinderNode(Node):
         if self.map_data is None:
             self.get_logger().warning("No map data available")
             return
+
+        # mission_control
+        # do not proceed if not in LOCATE state
+        if self.mission_state != "LOCATE":
+            return
+
+        if GAZEBO: # quickly explore everything
+            self.spin_360()
         
         # Convert map to numpy array
         map_array = np.array(self.map_data.data).reshape(
@@ -454,8 +586,17 @@ class FinderNode(Node):
             return
 
         # Convert the chosen frontier to world coordinates
-        goal_x = chosen_frontier[1] * self.map_data.info.resolution + self.map_data.info.origin.position.x
-        goal_y = chosen_frontier[0] * self.map_data.info.resolution + self.map_data.info.origin.position.y
+        goalPose = PoseStamped()
+        goalPose.header.frame_id = 'map'
+        goalPose.header.stamp = self.get_clock().now().to_msg()
+        goalPose.pose.position.x = float(chosen_frontier[1])
+        goalPose.pose.position.y = float(chosen_frontier[0])
+        goalPose.pose.orientation = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)  # Identity quaternion
+
+        goalPose = self.transform_to_valid_goal(goalPose)
+
+        goal_x= goalPose.pose.position.x
+        goal_y = goalPose.pose.position.y
 
         # Navigate to the chosen frontier
         self.navigate_to(goal_x, goal_y)
@@ -507,10 +648,18 @@ class FinderNode(Node):
             for hotspot in hotspots:
                 cY, cX, value = hotspot
                 self.get_logger().info(f"Casualty at map index: ({cY}, {cX}) with value: {value}")
-                cas_x = cX 
-                cas_y = cY 
+                cas_x = cX
+                cas_y = cY
                 self.casualties.append((cas_x, cas_y))
-                self.publish_casualties()
+            
+            self.publish_casualties()
+
+            self.mission_state = "STOPPED"
+            # update mission_control
+            msg = CasualtyLocateStatus()
+            msg.all_casualties_found = True
+            self.cas_locate_pub.publish(msg)
+
 
             return
 
