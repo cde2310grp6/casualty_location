@@ -21,6 +21,9 @@ import cv2
 from custom_msg_srv.msg import CasualtySaveStatus, CasualtyLocateStatus, ArrayCasualtyPos
 from custom_msg_srv.srv import StartCasualtyService
 
+# for marking heatmap on Rviz
+from casualty_location.rviz_marker import RvizMarker as heatmap_marker
+
 SENSOR_FOV = 60.0  # Field of view in degrees
 POSE_CACHE_SIZE = 20  # Number of poses to keep in the cache
 ODOM_RATE = 20.0 # Rate of odometry updates in Hz
@@ -50,12 +53,16 @@ class FinderNode(Node):
         self.pose_received = False
         self.map_data = None
         self.grid = None
-        self.thermal_confidence = None
+        self.heatmap = None
         self.nav_in_progress = False
         self.exploring = True
+        self.previous_origin = None
+        self.previous_grid_shape = None
 
         self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, 10)
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
+
+        self.heatmap_marker = heatmap_marker()
         
         if not GAZEBO:
             self.ir_sub = self.create_subscription(String, '/ir_data', self.ir_callback, 10)
@@ -126,15 +133,83 @@ class FinderNode(Node):
         self.origin_cache.append(self.origin)
         clean_origin_cache(self)
 
+        # continuously update the OccupancyGrid data in self.grid
         data = np.array(self.map_data.data)
         width = self.map_data.info.width
         height = self.map_data.info.height
         self.grid = data.reshape((height, width))
-        self.thermal_confidence = np.zeros_like(self.grid, dtype=int)
 
+                    # Determine map expansion direction
+        if self.previous_origin is not None and self.previous_grid_shape is not None:
+            # Check if the origin has shifted
+            origin_dx = self.origin[0] - self.previous_origin[0]
+            origin_dy = self.origin[1] - self.previous_origin[1]
+
+            # Check if the grid size has changed
+            delta_width = self.grid.shape[1] - self.previous_grid_shape[1]
+            delta_height = self.grid.shape[0] - self.previous_grid_shape[0]
+
+            # Determine expansion direction
+            if delta_width > 0:
+                if origin_dx < 0:
+                    self.get_logger().info("Grid expanded to the left.")
+                else:
+                    self.get_logger().info("Grid expanded to the right.")
+            if delta_height > 0:
+                if origin_dy < 0:
+                    self.get_logger().info("Grid expanded downward.")
+                else:
+                    self.get_logger().info("Grid expanded upward.")
+
+        # Update previous map data
+        self.previous_origin = self.origin
+        self.previous_grid_shape = self.grid.shape
+
+        # initialise a heatmap that is the same shape as OccupancyGrid/self.grid
         if not self.map_received:
             self.map_received = True
+            self.heatmap = np.full_like(self.grid, fill_value=-1.0, dtype=float)
             self.init_plot()
+            # update the map consts for rviz marker
+            self.heatmap_marker.update_map_consts(
+                msg.info.resolution,
+                msg.info.origin.position.x, msg.info.origin.position.y)
+            self.heatmap_update = self.create_timer(2.0, self.publish_heat_marker_array)
+
+        self.align_heatmap_to_grid()
+
+    def align_heatmap_to_grid(self):
+        """
+        Aligns self.heatmap to the shape of self.grid by embedding it into a larger array.
+        Preserves the original data in self.heatmap.
+        """
+        if self.heatmap.shape != self.grid.shape:
+            # Create a new array with the same shape as self.grid, initialized to -1.0
+            new_heatmap = np.full_like(self.grid, fill_value=-1.0, dtype=float)
+
+            # Determine the overlapping region
+            min_rows = min(self.heatmap.shape[0], self.grid.shape[0])
+            min_cols = min(self.heatmap.shape[1], self.grid.shape[1])
+
+            # Copy data based on expansion direction
+            if self.origin[0] < self.previous_origin[0]:  # Expanded to the left
+                col_offset = self.grid.shape[1] - self.heatmap.shape[1]
+            else:  # Expanded to the right
+                col_offset = 0
+
+            if self.origin[1] < self.previous_origin[1]:  # Expanded downward
+                row_offset = self.grid.shape[0] - self.heatmap.shape[0]
+            else:  # Expanded upward
+                row_offset = 0
+
+            # Embed the heatmap into the new array
+            new_heatmap[row_offset:row_offset + min_rows, col_offset:col_offset + min_cols] = self.heatmap[:min_rows, :min_cols]
+
+            return new_heatmap
+        else:
+            # If shapes already match, return the original heatmap
+            return self.heatmap
+
 
     def odom_callback(self, msg):
         def clean_pose_cache(self):
@@ -200,7 +275,7 @@ class FinderNode(Node):
         dy = arrow_length * math.sin(self.robot_yaw)
         self.robot_arrow = self.ax.arrow(robot_x, robot_y, dx, dy, head_width=2, head_length=2, fc='r', ec='r')
 
-        self.im.set_data(self.grid)
+        self.im.set_data(self.heatmap)
         self.ax.legend()
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
@@ -233,23 +308,61 @@ class FinderNode(Node):
             dx = math.cos(rad_angle)
             dy = math.sin(rad_angle)
 
+            # searches 100 steps in the direction of angle 
+            # 100 steps corresponds to effective range of the amg8833
+            # if it encounters a wall, then it will update the the temperature_value of that coordinate 
+            # afterwards, breaks.
             for step in range(1, 100):
                 row = int(round(cx + step * dy))
                 col = int(round(cy + step * dx))
 
                 grid_rows, grid_cols = self.grid.shape
-                #TODO: this mapping may not be correct! need to double check
-                # idk if row and grid should be compared to self.grid or self.map_data
 
                 if 0 <= row < grid_rows  and 0 <= col < grid_cols:
                     if self.grid[row][col] > 0:
-                        # Assign value to the current cell
+                        # Use OccGrid to check if it is a wall
+                        # If it is, 
+                        # Assign heat value to self.heatmap
                         if self.grid[row][col] > 90:
+                            self.heatmap[row][col] = interpolated_data[idx]
                             self.grid[row][col] = interpolated_data[idx]
                         #else:
                             #self.grid[row][col] = (self.grid[row][col] + interpolated_data[idx]) / 2
                 else:
                     break
+
+
+
+
+    def publish_heat_marker_array(self):
+        """
+        self.grid is the OccupancyGrid
+        self.grid's cells correspond directly to the OccupancyGrid, 
+        
+        self.heatmap is the heatmap, with the exact same shape as self.grid
+        
+        this function generates an array of PoseStamped objects, with colour corresponding to the temperature value.
+        we will scan every 10th cell (to reduce computation)
+        then add that position to heatMarkers only if it is a wall...
+        we will use self.grid to check if it is a wall
+
+        temp_markers will contain tuples (y, x, temp)
+        passed into heatmap marker pub
+        """
+
+        temp_markers = []
+
+        # Iterate through the heatmap, checking every 2nd cell
+        rows, cols = self.heatmap.shape
+        for row in range(0, rows, 2):
+            for col in range(0, cols, 2):
+
+                # Check if the cell corresponds to a wall in the grid
+                if self.grid[row][col] > 90:  # Wall threshold
+                    heat_value = self.heatmap[row][col]
+                    temp_markers.append((row, col, heat_value))   # (y, x, temp)
+
+        # self.heatmap_marker.publish_heatmap(temp_markers)
 
     def spin_360(self):
         if not self.spin_client.wait_for_server(timeout_sec=5.0):
@@ -343,7 +456,7 @@ class FinderNode(Node):
             # idk if row and grid should be compared to self.grid or self.map_data
 
             # Check if this cell is a wall (100) and hasn't been thermally scanned yet
-            if 0 <= r < grid_rows and 0 <= c < grid_cols and self.grid[r, c] > 90:
+            if 0 <= r < grid_rows and 0 <= c < grid_cols and self.heatmap[r, c] == -1.0 and self.grid[r, c] > 90:
                 neighbors = self.grid[r-1:r+2, c-1:c+2].flatten()
                 if 100 in neighbors and (r, c) not in self.ignored_frontiers:
                     frontiers.append((r, c))
@@ -515,8 +628,8 @@ class FinderNode(Node):
                 cY, cX, value = hotspot
                 self.get_logger().info(f"Casualty at map index: ({cY}, {cX}) with value: {value}")
                 # Convert to world coordinates
-                cas_x = cX * self.map_data.info.resolution + self.map_data.info.origin.position.x
-                cas_y = cY * self.map_data.info.resolution + self.map_data.info.origin.position.y
+                cas_x = cX 
+                cas_y = cY
                 self.casualties.append((cas_x, cas_y))
                 self.publish_casualties()
 
@@ -532,8 +645,8 @@ class FinderNode(Node):
             pose.header.stamp = self.get_clock().now().to_msg()
             pose.header.frame_id = "map"
             # convert to map coordinates
-            pose.pose.position.x = x * self.map_data.info.resolution + self.map_data.info.origin.position.x
-            pose.pose.position.y = y * self.map_data.info.resolution + self.map_data.info.origin.position.y
+            pose.pose.position.x = x
+            pose.pose.position.y = y 
             pose.pose.position.z = 0.0
             pose.pose.orientation.w = 1.0  # Identity quaternion
 

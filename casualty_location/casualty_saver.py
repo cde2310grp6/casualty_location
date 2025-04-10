@@ -97,14 +97,14 @@ class CasualtySaver(Node):
         self.map_data = msg
 
     def casualty_callback(self, msg):
-        self.get_logger().info("Received casualty locations")
+        self.get_logger().info(f"Received {len(msg.casualties)} casualty locations")
         self.waypoints = msg.casualties
 
         # show casualties in rviz
         for cas in self.waypoints:
             disp_cas = []
             disp_cas.append( (cas.pose.position.x, cas.pose.position.y) )
-            self.cas_marker.publish_marker_array(disp_cas)
+        self.cas_marker.publish_marker_array(disp_cas)
 
     def launch_now(self):
         self.get_logger().info("calling launcher")
