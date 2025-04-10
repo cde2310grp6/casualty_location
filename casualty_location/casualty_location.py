@@ -273,18 +273,18 @@ class FinderNode(Node):
         for radius in range(10, max_radius):
             for dx, dy in directions:
                 # Move outward in the current direction
-                new_x = x + dx * radius
-                new_y = y + dy * radius
+                new_x = int(x + dx * radius)
+                new_y = int(y + dy * radius)
 
                 # Check the distance to the closest wall
                 distance_to_wall = dist_to_closest_wall(self, new_x, new_y)
                 self.get_logger().info(f"Distance to closest wall at ({new_x}, {new_y}): {distance_to_wall}")
 
                 # If the distance exceeds 19, return the current waypoint
-                if 0 < new_x < cols and 0 < new_y < rows and distance_to_wall > 3.0:
+                if 0 < new_x < cols and 0 < new_y < rows and self.grid[new_y][new_x] != -1 and distance_to_wall > 3.0:
                     self.get_logger().info(f"Valid goal found at ({new_x}, {new_y}) with distance {distance_to_wall}")
-                    waypoint.pose.position.x = new_x
-                    waypoint.pose.position.y = new_y
+                    waypoint.pose.position.x = float(new_x)
+                    waypoint.pose.position.y = float(new_y)
                     return waypoint
 
         # If no valid goal is found, return the original waypoint
@@ -347,42 +347,6 @@ class FinderNode(Node):
         future = self.spin_client.send_goal_async(spin_goal)
         future.add_done_callback(self.spin_response_callback)
 
-
-    #########################################################################################3
-    # near duplicate of spin_360, but spins to face the target
-
-    def spin_face_target(self):
-        if not self.spin_client.wait_for_server(timeout_sec=5.0):
-            self.get_logger().error("Spin action server not available!")
-            return
-
-        robot_x, robot_y = self.robot_position
-        yaw = math.atan2(y - robot_y, x - robot_x)  # Direct the robot towards the target
-       
-        spin_goal = Spin.Goal()
-        spin_goal.target_yaw = yaw  # 360 degrees
-        spin_goal.time_allowance = Duration(seconds=6.0).to_msg()
-
-        self.get_logger().info("Sending spin goal (360 degrees)...")
-        future = self.spin_client.send_goal_async(spin_goal)
-        future.add_done_callback(self.spin_face_target_callback)
-
-    def spin_face_target_callback(self, future):
-        goal_handle = future.result()
-        if not goal_handle.accepted:
-            self.get_logger().warn('Spin goal rejected')
-            return
-
-        self.get_logger().info('Spin goal accepted')
-        result_future = goal_handle.get_result_async()
-        result_future.add_done_callback(self.spin_face_target_result)
-
-    def spin_face_target_result(self, future):
-        result = future.result().result
-        self.get_logger().info(f"Spin completed with result: {result}")
-        self.nav_in_progress = False
-
-    #########################################################################################3
         
 
     def navigate_to(self, x, y):
@@ -425,8 +389,7 @@ class FinderNode(Node):
             self.get_logger().info(f"Navigation result: {result}")
         except Exception as e:
             self.get_logger().error(f"Navigation failed: {e}")
-        self.spin_360()
-        #self.nav_in_progress = False
+
 
     def spin_response_callback(self, future):
         goal_handle = future.result()
