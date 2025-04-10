@@ -107,11 +107,8 @@ class FinderNode(Node):
         elif request.state == "LOCATE":
             self.mission_state = "LOCATE"
             self.explore_timer = self.create_timer(5.0, self.explore)
-        elif request.state == "SAVE":
-            self.mission_state = "SAVE"
-            # TODO: DO SAVE CASUALTY ACTIONS
-            # leave blank if casualty saving will be done in a different node
-            pass
+        else:
+            self.mission_state = "STOPPED"
         return response
     
     def map_callback(self, msg):
@@ -129,13 +126,14 @@ class FinderNode(Node):
         self.origin_cache.append(self.origin)
         clean_origin_cache(self)
 
+        data = np.array(self.map_data.data)
+        width = self.map_data.info.width
+        height = self.map_data.info.height
+        self.grid = data.reshape((height, width))
+        self.thermal_confidence = np.zeros_like(self.grid, dtype=int)
+
         if not self.map_received:
             self.map_received = True
-            data = np.array(self.map_data.data)
-            width = self.map_data.info.width
-            height = self.map_data.info.height
-            self.grid = data.reshape((height, width))
-            self.thermal_confidence = np.zeros_like(self.grid, dtype=int)
             self.init_plot()
 
     def odom_callback(self, msg):
