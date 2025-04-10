@@ -24,6 +24,11 @@ from std_srvs.srv import Trigger
 # for casualty locations
 from custom_msg_srv.msg import ArrayCasualtyPos
 
+import casualty_location.rviz_marker as rviz_marker
+
+# for map res, for rviz marker
+from nav_msgs.msg import OccupancyGrid
+
 
 
 class CasualtySaver(Node):
@@ -50,8 +55,15 @@ class CasualtySaver(Node):
         # get self.robot_position
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
 
+        # get map res for rviz marker
+        self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, 10)
+        self.map_data = None
+
         self.saving_in_progress = False
         self.robot_position = (0, 0)
+
+         # for showing casualty locations in rviz
+        self.cas_marker = rviz_marker.RvizMarker()
 
 
     def start_casualty_callback(self, request, response):
@@ -66,12 +78,27 @@ class CasualtySaver(Node):
                 # no timer to cancel
                 pass
 
+        # show casualties in rviz
+        for cas in self.waypoints:
+            disp_cas = []
+            disp_cas.append( (cas.pose.position.x, cas.pose.position.y) )
+            self.cas_marker.publish_marker_array(disp_cas)
+
         return response
 
     def odom_callback(self, msg):
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
         self.robot_position = (x, y)
+
+
+    def map_callback(self, msg):
+        if not self.map_data:
+            self.cas_marker.update_map_consts(
+                msg.info.resolution,
+                msg.info.origin.position.x, msg.info.origin.position.y)
+                
+        self.map_data = msg
 
     def casualty_callback(self, msg):
         self.get_logger().info("Received casualty locations")

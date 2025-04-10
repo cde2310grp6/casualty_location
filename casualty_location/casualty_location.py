@@ -30,7 +30,7 @@ DELAY_IR = 0.7  # Delay in seconds for IR data processing
 
 CASUALTY_COUNT = 2 # Number of casualties to find
 
-GAZEBO = False # Set to True if running in Gazebo simulation
+GAZEBO = True # Set to True if running in Gazebo simulation
 
 class BotPose(object):
     def __init__(self, x, y, yaw):
@@ -53,9 +53,6 @@ class FinderNode(Node):
         self.thermal_confidence = None
         self.nav_in_progress = False
         self.exploring = True
-
-        self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, 10)
-        self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
         
         if not GAZEBO:
             self.ir_sub = self.create_subscription(String, '/ir_data', self.ir_callback, 10)
@@ -95,7 +92,7 @@ class FinderNode(Node):
 
         # topic to tell mission_control when casualty_location complete
         self.cas_locate_pub = self.create_publisher(CasualtyLocateStatus, 'casualty_found', 10)
-        self.cas_pose_pub = self.create_publisher(ArrayCasualtyPos, 'casualty_positions', 10)
+        self.cas_pose_pub = self.create_publisher(ArrayCasualtyPos, 'casualty_locations', 10)
 
     def start_casualty_callback(self, request, response):
         if request.state == "STOPPED":
@@ -106,7 +103,10 @@ class FinderNode(Node):
                 pass
         elif request.state == "LOCATE":
             self.mission_state = "LOCATE"
+            self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, 10)
+            self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
             self.explore_timer = self.create_timer(5.0, self.explore)
+
         else:
             self.mission_state = "STOPPED"
         return response
@@ -124,15 +124,16 @@ class FinderNode(Node):
         self.origin = (origin_x, origin_y)
         self.resolution = self.map_data.info.resolution
         self.origin_cache.append(self.origin)
-        clean_origin_cache()
+        clean_origin_cache(self)
 
-        data = np.array(self.map_data.data)
-        width = self.map_data.info.width
-        height = self.map_data.info.height
-        self.grid = data.reshape((height, width))
-        self.thermal_confidence = np.zeros_like(self.grid, dtype=int)
+
 
         if not self.map_received:
+            data = np.array(self.map_data.data)
+            width = self.map_data.info.width
+            height = self.map_data.info.height
+            self.grid = data.reshape((height, width))
+            self.thermal_confidence = np.zeros_like(self.grid, dtype=int)
             self.map_received = True
             self.init_plot()
 
@@ -156,7 +157,7 @@ class FinderNode(Node):
         pose = BotPose(x, y, yaw)
         self.robot_cache.append(pose)
         #self.get_logger().info(f"Robot Pose: {pose}")
-        clean_pose_cache()
+        clean_pose_cache(self)
 
         if GAZEBO:
             self.paint_wall()
@@ -506,9 +507,8 @@ class FinderNode(Node):
             for hotspot in hotspots:
                 cY, cX, value = hotspot
                 self.get_logger().info(f"Casualty at map index: ({cY}, {cX}) with value: {value}")
-                # Convert to world coordinates
-                cas_x = cX * self.map_data.info.resolution + self.map_data.info.origin.position.x
-                cas_y = cY * self.map_data.info.resolution + self.map_data.info.origin.position.y
+                cas_x = cX 
+                cas_y = cY 
                 self.casualties.append((cas_x, cas_y))
                 self.publish_casualties()
 
