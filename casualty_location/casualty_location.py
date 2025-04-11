@@ -30,8 +30,6 @@ DELAY_IR = 0.7  # Delay in seconds for IR data processing
 
 CASUALTY_COUNT = 1 # Number of casualties to find
 
-GAZEBO = True # Set to True if running in Gazebo simulation
-
 class BotPose(object):
     def __init__(self, x, y, yaw):
         self.x = x
@@ -54,8 +52,16 @@ class FinderNode(Node):
         self.nav_in_progress = False
         self.exploring = True
         self.painting = False
+
+        if not self.has_parameter('use_sim_time'):
+            self.declare_parameter('use_sim_time', False)
+
+        use_sim_time = self.get_parameter('use_sim_time').get_parameter_value().bool_value
+        self.GAZEBO = use_sim_time
+
+
         
-        if not GAZEBO:
+        if not self.GAZEBO:
             self.ir_sub = self.create_subscription(String, '/ir_data', self.ir_callback, 10)
             self.latest_ir_data = None
         else:
@@ -157,7 +163,7 @@ class FinderNode(Node):
         #self.get_logger().info(f"Robot Pose: {pose}")
         clean_pose_cache(self)
 
-        if GAZEBO:
+        if self.GAZEBO:
             self.paint_wall()
             self.update_plot()
 

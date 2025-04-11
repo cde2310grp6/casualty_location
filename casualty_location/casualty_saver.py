@@ -66,7 +66,6 @@ class CasualtySaver(Node):
         # for spin_face_target
         self.spin_client = ActionClient(self, Spin, 'spin')
 
-
         # get map res for rviz marker
         self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, 10)
         self.map_data = None
@@ -77,6 +76,13 @@ class CasualtySaver(Node):
 
          # for showing casualty locations in rviz
         self.cas_marker = rviz_marker.RvizMarker()
+
+        if not self.has_parameter('use_sim_time'):
+            self.declare_parameter('use_sim_time', False)
+
+        use_sim_time = self.get_parameter('use_sim_time').get_parameter_value().bool_value
+        self.simulating = use_sim_time
+
 
         self.curr_target = None
 
@@ -339,6 +345,10 @@ class CasualtySaver(Node):
         self.get_logger().info(f"Spin completed with result: {result}")
         self.nav_in_progress = False
         self.launch_now()
+        if self.simulating:
+            self.get_logger().info("Waiting for 3 seconds to simulate saving...")
+            sleep(3.0)
+            self.saving_in_progress = False
         
 
 
