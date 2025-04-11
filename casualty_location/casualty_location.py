@@ -49,10 +49,11 @@ class FinderNode(Node):
         self.map_received = False
         self.pose_received = False
         self.map_data = None
+        self.occupancy_grid = None
         self.grid = None
-        self.thermal_confidence = None
         self.nav_in_progress = False
         self.exploring = True
+        self.painting = False
         
         if not GAZEBO:
             self.ir_sub = self.create_subscription(String, '/ir_data', self.ir_callback, 10)
@@ -130,7 +131,7 @@ class FinderNode(Node):
             width = self.map_data.info.width
             height = self.map_data.info.height
             self.grid = data.reshape((height, width))
-            self.thermal_confidence = np.zeros_like(self.grid, dtype=int)
+            self.occupancy_grid = data.reshape((height, width))
             self.map_received = True
             self.init_plot()
 
@@ -207,7 +208,7 @@ class FinderNode(Node):
 
         self.get_logger().info(f"Transforming waypoint to valid goal: {waypoint.pose.position.x}, {waypoint.pose.position.y}")
         # Get the dimensions of the occupancy grid
-        rows, cols = self.grid.shape
+        rows, cols = self.occupancy_grid.shape
 
         def dist_to_closest_wall(self, x, y):
             """
@@ -221,7 +222,7 @@ class FinderNode(Node):
             Returns:
                 float: The distance to the closest obstacle. Returns -1 if no obstacle is found.
             """
-            if self.grid is None:
+            if self.occupancy_grid is None:
                 self.get_logger().error("Occupancy grid is not available.")
                 return -1
 
@@ -242,7 +243,7 @@ class FinderNode(Node):
                         # Check if the cell is within bounds
                         if 0 <= nx < cols and 0 <= ny < rows:
                             # Check if the cell is an obstacle
-                            if self.grid[ny, nx] > 90:
+                            if self.occupancy_grid[ny, nx] > 10:
                                 # Calculate the distance to the obstacle
                                 obstacle_x = nx
                                 obstacle_y = ny
@@ -261,14 +262,14 @@ class FinderNode(Node):
 
         # Perform a radial search to find a valid goal
         resolution = self.map_data.info.resolution
-        self.get_logger().info(f"Map resolution: {resolution}")
+        #self.get_logger().info(f"Map resolution: {resolution}")
         step_size = resolution  # Move outward in steps of the map resolution
         max_radius = 150  # Limit the search radius to avoid infinite loops
 
         # Cardinal directions: (dx, dy) for up, down, left, right
         directions = [(0, step_size), (0, -step_size), (step_size, 0), (-step_size, 0), (step_size, step_size), (-step_size, -step_size), (step_size, -step_size), (-step_size, step_size)] 
         random.shuffle(directions)
-        for radius in range(5, max_radius):
+        for radius in range(10, max_radius):
             for dx, dy in directions:
                 # Move outward in the current direction
                 new_x = int(x + dx * radius)
@@ -279,7 +280,7 @@ class FinderNode(Node):
                 #self.get_logger().info(f"Distance to closest wall at ({new_x}, {new_y}): {distance_to_wall}")
 
                 # If the distance exceeds 19, return the current waypoint
-                if 0 < new_x < cols and 0 < new_y < rows and self.grid[new_y][new_x] < 0 and distance_to_wall > 3.0:
+                if 0 < new_x < cols and 0 < new_y < rows and 0.0 <= self.grid[new_y][new_x] < 10 and distance_to_wall > 3.0:
                     #self.get_logger().info(f"Valid goal found at ({new_x}, {new_y}) with distance {distance_to_wall}")
                     waypoint.pose.position.x = float(new_x)
                     waypoint.pose.position.y = float(new_y)
@@ -292,11 +293,12 @@ class FinderNode(Node):
     def paint_wall(self):
         # mission_control
         # do not proceed if not in LOCATE state
-        if self.mission_state != "LOCATE":
+        if self.mission_state != "LOCATE" or self.painting == True:
             return
 
         if not self.map_received or not self.pose_cache_full or not self.origin_cache_full:
             return
+        self.painting = True
         cy = int((self.robot_cache[self.pose_index].x - self.origin[0]) / self.resolution)
         cx = int((self.robot_cache[self.pose_index].y - self.origin[1]) / self.resolution)
         rows, cols = self.map_data.info.height, self.map_data.info.width
@@ -333,6 +335,7 @@ class FinderNode(Node):
                         break
                 else:
                     break
+        self.painting = False
 
     def spin_360(self):
         if not self.spin_client.wait_for_server(timeout_sec=5.0):
@@ -414,10 +417,8 @@ class FinderNode(Node):
         rows, cols = grid.shape
         visited = np.zeros_like(grid, dtype=bool)
         costmap = np.zeros_like(grid, dtype=float)
-        for row, col in visited_frontiers:
-            costmap[row, col] = -1  # Mark visited frontiers as invalid
-        robot_c = int((self.robot_position[0]- self.origin[0]) / self.resolution)
-        robot_r = int((self.robot_position[1]- self.origin[1]) / self.resolution)
+        robot_c = int((self.robot_position[0] - self.origin[0]) / self.resolution)
+        robot_r = int((self.robot_position[1] - self.origin[1]) / self.resolution)
 
         for r in range(rows):
             for c in range(cols):
@@ -442,23 +443,48 @@ class FinderNode(Node):
 
                 region_size = len(region_cells)
 
-                # Assign cost to all cells in this region
+                # Assign score to all cells in this region
                 for cr, cc in region_cells:
                     dist = np.sqrt((cr - robot_r)**2 + (cc - robot_c)**2)
-                    #self.get_logger().info(f"Region size: {region_size}, Distance: {dist}")
-                    score = (region_size-5) / (dist + 1.0)  # +1 to avoid div by zero
+                    score = (region_size - 10) / (dist + 1.0)  # +1 to avoid div by zero
                     costmap[cr, cc] = score
+
+        for row, col in visited_frontiers:
+            costmap[row, col] = 0  # Mark visited frontiers as invalid
+
+        # Update the costmap plot
+        self.update_costmap_plot(costmap)
 
         return costmap
 
     def choose_frontier(self, costmap):
-        max_value_index = np.unravel_index(np.argmax(costmap), costmap.shape)
-        row, col = max_value_index
+        max_value_index = np.argmax(costmap)
+        row = max_value_index // costmap.shape[1]
+        col = max_value_index % costmap.shape[1]
         if costmap[row, col] <= 0:
             return None
         self.visited_frontiers.add((row, col))
         return (row, col)
 
+    def init_costmap_plot(self):
+        """Initialize the costmap plot."""
+        self.costmap_fig, self.costmap_ax = plt.subplots(figsize=(8, 8))
+        self.costmap_im = self.costmap_ax.imshow(
+            np.zeros((1, 1)), cmap='hot', origin='lower', vmin=0, vmax=1
+        )
+        self.costmap_ax.set_title("Costmap")
+        plt.show(block=False)
+
+    def update_costmap_plot(self, costmap):
+        """Update the costmap plot."""
+        if not hasattr(self, 'costmap_im'):
+            self.init_costmap_plot()
+
+        self.costmap_im.set_data(costmap)
+        self.costmap_im.set_extent([0, costmap.shape[1], 0, costmap.shape[0]])
+        self.costmap_im.set_clim(vmin=np.min(costmap), vmax=np.max(costmap))
+        self.costmap_fig.canvas.draw()
+        self.costmap_fig.canvas.flush_events()
 
     def explore(self):
         if not self.exploring:
@@ -491,8 +517,8 @@ class FinderNode(Node):
 
         # Convert the chosen frontier to world coordinates
         goalPose = PoseStamped()
-        goalPose.pose.position.x = float(chosen_frontier[0])
-        goalPose.pose.position.y = float(chosen_frontier[1])
+        goalPose.pose.position.x = float(chosen_frontier[1])
+        goalPose.pose.position.y = float(chosen_frontier[0])
 
         # Transform to a valid goal
         goalPose = self.transform_to_valid_goal(goalPose)
@@ -502,7 +528,7 @@ class FinderNode(Node):
         goal_y = goalPose.pose.position.y
         dx = goal_x - chosen_frontier[0]
         dy = goal_y - chosen_frontier[1]
-        yaw = -math.atan2(dy, dx)  # Calculate yaw angle
+        yaw = math.atan2(dy, dx)  # Calculate yaw angle
 
         # Log the calculated yaw
         self.get_logger().info(f"Calculated yaw angle to goal: {math.degrees(yaw)} degrees")
