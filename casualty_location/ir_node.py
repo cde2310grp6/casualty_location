@@ -8,7 +8,7 @@ from rclpy.node import Node
 from std_msgs.msg import String
 
 # Debugging values removed
-DETECTION_OFFSET = 5  # Offset from average temperature to detect objects
+
 
 class IRPubNode(Node):
     def __init__(self):
@@ -44,21 +44,22 @@ class IRPubNode(Node):
     def timer_callback(self):
         pix_to_read = 64
         pix_res = (8, 8)
-        grid_size = 32
 
         status, pixels = self.sensor.read_temp(pix_to_read)
 
         if not status:
             z = np.reshape(pixels, pix_res)
-            z_interp = cv2.resize(z, (grid_size, grid_size), interpolation=cv2.INTER_LINEAR)
+            for i in range(4):
+                z = np.delete(z, 0, axis=0)
 
             # Get the highest value from each column
-            max_in_columns = np.max(z_interp, axis=0)  # Max value per column
+            max_in_columns = np.max(z, axis=0)  # Max value per column
 
             # Publish the result as a 1D array
             msg = String()
             msg.data = str(max_in_columns.tolist())  # Convert to list and publish
             self.publisher.publish(msg)
+            self.get_logger().info(f"Publishing IR data: {msg.data}")
 
         else:
             self.get_logger().error("Sensor read failed")

@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 import math
 from nav2_msgs.action import Spin
 from rclpy.duration import Duration
-import cv2
+import random
 
 # for mission control
 from custom_msg_srv.msg import CasualtySaveStatus, CasualtyLocateStatus, ArrayCasualtyPos
@@ -30,7 +30,7 @@ DELAY_IR = 0.7  # Delay in seconds for IR data processing
 
 CASUALTY_COUNT = 1 # Number of casualties to find
 
-GAZEBO = False # Set to True if running in Gazebo simulation
+GAZEBO = True # Set to True if running in Gazebo simulation
 
 class BotPose(object):
     def __init__(self, x, y, yaw):
@@ -75,8 +75,7 @@ class FinderNode(Node):
         self.origin_index = round(ORIGIN_CACHE_SIZE - DELAY_IR * MAP_RATE -1) # Index of the origin to use for navigation
 
         self.visited_frontiers = set()
-        self.ignored_frontiers = []
-        self.previous_frontier = None
+        self.costmap = None
 
         self.casualties = []
         self.binary = None
@@ -105,7 +104,7 @@ class FinderNode(Node):
             self.mission_state = "LOCATE"
             self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, 10)
             self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
-            self.explore_timer = self.create_timer(5.0, self.explore)
+            self.explore_timer = self.create_timer(1.0, self.explore)
 
         else:
             self.mission_state = "STOPPED"
@@ -125,8 +124,6 @@ class FinderNode(Node):
         self.resolution = self.map_data.info.resolution
         self.origin_cache.append(self.origin)
         clean_origin_cache(self)
-
-
 
         if not self.map_received:
             data = np.array(self.map_data.data)
@@ -250,7 +247,7 @@ class FinderNode(Node):
                                 obstacle_x = nx
                                 obstacle_y = ny
                                 distance = math.sqrt((obstacle_x - x) ** 2 + (obstacle_y - y) ** 2)
-                                self.get_logger().info(f"Closest obstacle found at ({obstacle_x}, {obstacle_y}) with distance {distance}")
+                                #self.get_logger().info(f"Closest obstacle found at ({obstacle_x}, {obstacle_y}) with distance {distance}")
                                 return distance
 
             # If no obstacle is found, return -1
@@ -264,13 +261,14 @@ class FinderNode(Node):
 
         # Perform a radial search to find a valid goal
         resolution = self.map_data.info.resolution
+        self.get_logger().info(f"Map resolution: {resolution}")
         step_size = resolution  # Move outward in steps of the map resolution
         max_radius = 150  # Limit the search radius to avoid infinite loops
 
         # Cardinal directions: (dx, dy) for up, down, left, right
         directions = [(0, step_size), (0, -step_size), (step_size, 0), (-step_size, 0), (step_size, step_size), (-step_size, -step_size), (step_size, -step_size), (-step_size, step_size)] 
-
-        for radius in range(10, max_radius):
+        random.shuffle(directions)
+        for radius in range(5, max_radius):
             for dx, dy in directions:
                 # Move outward in the current direction
                 new_x = int(x + dx * radius)
@@ -278,11 +276,11 @@ class FinderNode(Node):
 
                 # Check the distance to the closest wall
                 distance_to_wall = dist_to_closest_wall(self, new_x, new_y)
-                self.get_logger().info(f"Distance to closest wall at ({new_x}, {new_y}): {distance_to_wall}")
+                #self.get_logger().info(f"Distance to closest wall at ({new_x}, {new_y}): {distance_to_wall}")
 
                 # If the distance exceeds 19, return the current waypoint
-                if 0 < new_x < cols and 0 < new_y < rows and self.grid[new_y][new_x] != -1 and distance_to_wall > 3.0:
-                    self.get_logger().info(f"Valid goal found at ({new_x}, {new_y}) with distance {distance_to_wall}")
+                if 0 < new_x < cols and 0 < new_y < rows and self.grid[new_y][new_x] < 0 and distance_to_wall > 3.0:
+                    #self.get_logger().info(f"Valid goal found at ({new_x}, {new_y}) with distance {distance_to_wall}")
                     waypoint.pose.position.x = float(new_x)
                     waypoint.pose.position.y = float(new_y)
                     return waypoint
@@ -299,7 +297,6 @@ class FinderNode(Node):
 
         if not self.map_received or not self.pose_cache_full or not self.origin_cache_full:
             return
-
         cy = int((self.robot_cache[self.pose_index].x - self.origin[0]) / self.resolution)
         cx = int((self.robot_cache[self.pose_index].y - self.origin[1]) / self.resolution)
         rows, cols = self.map_data.info.height, self.map_data.info.width
@@ -319,23 +316,20 @@ class FinderNode(Node):
             dx = math.cos(rad_angle)
             dy = math.sin(rad_angle)
 
-            for step in range(1, 100):
+            for step in range(1,40):
                 row = int(round(cx + step * dy))
                 col = int(round(cy + step * dx))
 
-<<<<<<< HEAD
-                #if 0 <= row < rows - 1 and 0 <= col < cols - 1:
-                if row in [i for i in range(rows)] and col in [j for j in range(cols)]:
-                    if self.grid[row][col] > 0:
-=======
                 if 0 <= row < rows and 0 <= col < cols:
                     if self.grid[row][col] > 10:
->>>>>>> origin/main
-                        # Assign value to the current cell
                         if self.grid[row][col] > 90:
                             self.grid[row][col] = interpolated_data[idx]
-                        #else:
-                            #self.grid[row][col] = (self.grid[row][col] + interpolated_data[idx]) / 2
+                            # Check if the next cell is also a wall (100) and hasn't been thermally scanned yet
+                        row = int(round(cx + (step+1) * dy)) 
+                        col = int(round(cy + (step+1) * dx))
+                        if 0 <= row < rows and 0 <= col < cols:
+                            if self.grid[row][col] > 90:
+                                self.grid[row][col] = interpolated_data[idx]
                         break
                 else:
                     break
@@ -347,7 +341,7 @@ class FinderNode(Node):
 
         spin_goal = Spin.Goal()
         spin_goal.target_yaw = 2 * math.pi  # 360 degrees
-        spin_goal.time_allowance = Duration(seconds=15.0).to_msg()
+        spin_goal.time_allowance = Duration(seconds=20.0).to_msg()
 
         self.get_logger().info("Sending spin goal (360 degrees)...")
         future = self.spin_client.send_goal_async(spin_goal)
@@ -355,7 +349,7 @@ class FinderNode(Node):
 
         
 
-    def navigate_to(self, x, y):
+    def navigate_to(self, x, y, yaw):
         self.nav_in_progress = True
         goal_msg = PoseStamped()
         goal_msg.header.frame_id = 'map'
@@ -364,8 +358,6 @@ class FinderNode(Node):
         goal_msg.pose.position.y = y * self.map_data.info.resolution + self.map_data.info.origin.position.y
 
         # Compute yaw to face the target (low confidence area)
-        robot_x, robot_y = self.robot_position
-        yaw = math.atan2(y - robot_y, x - robot_x)  # Direct the robot towards the target
         quaternion = quaternion_from_euler(0, 0, yaw)
         goal_msg.pose.orientation = Quaternion(x=quaternion[0], y=quaternion[1], z=quaternion[2], w=quaternion[3])
 
@@ -395,6 +387,7 @@ class FinderNode(Node):
             self.get_logger().info(f"Navigation result: {result}")
         except Exception as e:
             self.get_logger().error(f"Navigation failed: {e}")
+        self.spin_360()
 
 
     def spin_response_callback(self, future):
@@ -412,98 +405,60 @@ class FinderNode(Node):
         self.get_logger().info(f"Spin completed with result: {result}")
         self.nav_in_progress = False
 
-    def find_frontiers(self, map_array):
-        frontiers = []
-        rows, cols = map_array.shape
-        visited = np.zeros_like(map_array, dtype=bool)
-        queue = deque()
-
-        robot_row = int((self.robot_position[1] - self.map_data.info.origin.position.y) / self.map_data.info.resolution)
-        robot_col = int((self.robot_position[0] - self.map_data.info.origin.position.x) / self.map_data.info.resolution)
-        self.get_logger().info(f"Robot map index: ({robot_row}, {robot_col})")
-
-        queue.append((robot_row, robot_col))
-        visited[robot_row, robot_col] = True
-
-        while queue:
-            r, c = queue.popleft()
-
-            # Check if this cell is a wall (100) and hasn't been thermally scanned yet
-            if self.grid[r, c] > 90:
-                neighbors = self.grid[r-1:r+2, c-1:c+2].flatten()
-                if 100 in neighbors and (r, c) not in self.ignored_frontiers:
-                    frontiers.append((r, c))
-
-            # Continue BFS to adjacent cells
-            for dr in [-1, 0, 1]:
-                for dc in [-1, 0, 1]:
-                    nr, nc = r + dr, c + dc
-                    if 0 <= nr < rows and 0 <= nc < cols and not visited[nr, nc]:
-                        visited[nr, nc] = True
-                        queue.append((nr, nc))
-
-        self.get_logger().info(f"Found {len(frontiers)} frontiers (walls needing thermal scan)")
-        return frontiers
-
-
-    def choose_frontier(self, frontiers, map_array):
+    def generate_costmap(self, grid, visited_frontiers, threshold=90):
         """
-        Choose the best frontier to explore based on distance, number of unknown cells around it, and direction.
+        Generate a costmap where each cell's value reflects:
+        - How large a connected unknown region it belongs to
+        - How close it is to the robot
         """
-        robot_col = int((self.robot_position[0] - self.map_data.info.origin.position.x) / self.map_data.info.resolution)
-        robot_row = int((self.robot_position[1] - self.map_data.info.origin.position.y) / self.map_data.info.resolution)
+        rows, cols = grid.shape
+        visited = np.zeros_like(grid, dtype=bool)
+        costmap = np.zeros_like(grid, dtype=float)
+        for row, col in visited_frontiers:
+            costmap[row, col] = -1  # Mark visited frontiers as invalid
+        robot_c = int((self.robot_position[0]- self.origin[0]) / self.resolution)
+        robot_r = int((self.robot_position[1]- self.origin[1]) / self.resolution)
 
-        chosen_frontier = None
-        high_score = -999.9
+        for r in range(rows):
+            for c in range(cols):
+                if visited[r, c] or grid[r, c] <= threshold:
+                    continue
 
-        for frontier in frontiers:
-            if frontier in self.visited_frontiers:
-                continue
+                # Flood-fill to get connected region
+                queue = deque([(r, c)])
+                region_cells = []
+                visited[r, c] = True
 
-            # Calculate distance to the robot
-            distance = np.sqrt((robot_row - frontier[0])**2 + (robot_col - frontier[1])**2)
+                while queue:
+                    cr, cc = queue.popleft()
+                    region_cells.append((cr, cc))
 
-            # Calculate the number of unknown cells around the frontier
-            r, c = frontier
-            neighbors = map_array[r-1:r+2, c-1:c+2].flatten()
-            unknown_count = np.sum(neighbors > 90)
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nr, nc = cr + dr, cc + dc
+                        if (0 <= nr < rows and 0 <= nc < cols and
+                            not visited[nr, nc] and grid[nr, nc] > threshold):
+                            visited[nr, nc] = True
+                            queue.append((nr, nc))
 
-            # Skip frontiers near already visited frontiers
-            #Copilot: Increased threshold to 3
-            skip = False
-            for visited in self.visited_frontiers:
-                if np.sqrt((visited[0] - r)**2 + (visited[1] - c)**2) < 2:  # Threshold distance
-                    skip = True
-                    break
-            if skip:
-                continue
+                region_size = len(region_cells)
 
-            # Calculate the angular penalty
-            frontier_angle = math.atan2(r - robot_row, c - robot_col)
-            angular_penalty = min(abs(frontier_angle - self.robot_yaw), 2 * math.pi - abs(frontier_angle - self.robot_yaw)) / math.pi
+                # Assign cost to all cells in this region
+                for cr, cc in region_cells:
+                    dist = np.sqrt((cr - robot_r)**2 + (cc - robot_c)**2)
+                    #self.get_logger().info(f"Region size: {region_size}, Distance: {dist}")
+                    score = (region_size-5) / (dist + 1.0)  # +1 to avoid div by zero
+                    costmap[cr, cc] = score
 
-            # Calculate a score based on distance, unknown count, and direction
-            direction_penalty = 0
-            if self.previous_frontier:
-                prev_r, prev_c = self.previous_frontier
-                direction_penalty = np.sqrt((prev_r - r)**2 + (prev_c - c)**2)
+        return costmap
 
-            score = 0.2 * distance + unknown_count  - 1 * angular_penalty # Extra emphasis on direction penalty (wastes a lot of time doing u turns)
+    def choose_frontier(self, costmap):
+        max_value_index = np.unravel_index(np.argmax(costmap), costmap.shape)
+        row, col = max_value_index
+        if costmap[row, col] <= 0:
+            return None
+        self.visited_frontiers.add((row, col))
+        return (row, col)
 
-            # Check if the score is better than the current best
-            if score > high_score:
-                chosen_frontier = frontier
-                high_score = score
-
-        if chosen_frontier:
-            self.visited_frontiers.add(chosen_frontier)
-            self.previous_frontier = chosen_frontier
-            self.get_logger().info(f"Chosen frontier: {chosen_frontier}")
-            # self.frontier_marker.publish_marker(chosen_frontier=chosen_frontier)
-        else:
-            self.get_logger().warning("No valid frontier found")
-        return chosen_frontier
-    
 
     def explore(self):
         if not self.exploring:
@@ -512,7 +467,7 @@ class FinderNode(Node):
         if self.nav_in_progress:
             self.get_logger().info("Navigation in progress, cannot choose frontier")
             return None
-        
+
         if self.map_data is None:
             self.get_logger().warning("No map data available")
             return
@@ -522,53 +477,44 @@ class FinderNode(Node):
         if self.mission_state != "LOCATE":
             return
 
-        if GAZEBO: # quickly explore everything
-            self.spin_360()
-        
-        # Convert map to numpy array
-        map_array = np.array(self.map_data.data).reshape(
-            (self.map_data.info.height, self.map_data.info.width))
-
-        # Detect frontiers
-        frontiers = self.find_frontiers(map_array)
-
-        if not frontiers:
-            self.get_logger().info("No frontiers found. Exploration complete!")
+        # Generate costmap and choose a frontier
+        self.costmap = self.generate_costmap(self.grid, self.visited_frontiers, threshold=90)
+        chosen_frontier = self.choose_frontier(self.costmap)
+        if chosen_frontier is None:
+            self.get_logger().info("No frontiers found. Location complete!")
             self.find_casualties()
             self.exploring = False
-
-            # update mission_control
             msg = CasualtyLocateStatus()
             msg.all_casualties_found = True
             self.cas_locate_pub.publish(msg)
-
-            plt.imsave('/tmp/grid_snapshot.png', self.grid, cmap='gray')
-            return
-
-        # Choose the closest frontier
-        chosen_frontier = self.choose_frontier(frontiers, map_array)
-
-        if not chosen_frontier:
-            self.get_logger().warning("No frontiers to explore")
-            self.find_casualties()
-            self.exploring = False
             return
 
         # Convert the chosen frontier to world coordinates
         goalPose = PoseStamped()
-        goalPose.header.frame_id = 'map'
-        goalPose.header.stamp = self.get_clock().now().to_msg()
-        goalPose.pose.position.x = float(chosen_frontier[1])
-        goalPose.pose.position.y = float(chosen_frontier[0])
-        goalPose.pose.orientation = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)  # Identity quaternion
+        goalPose.pose.position.x = float(chosen_frontier[0])
+        goalPose.pose.position.y = float(chosen_frontier[1])
 
+        # Transform to a valid goal
         goalPose = self.transform_to_valid_goal(goalPose)
 
-        goal_x= goalPose.pose.position.x
+        # Calculate yaw angle to face the goal
+        goal_x = goalPose.pose.position.x
         goal_y = goalPose.pose.position.y
+        dx = goal_x - chosen_frontier[0]
+        dy = goal_y - chosen_frontier[1]
+        yaw = -math.atan2(dy, dx)  # Calculate yaw angle
+
+        # Log the calculated yaw
+        self.get_logger().info(f"Calculated yaw angle to goal: {math.degrees(yaw)} degrees")
+
+        # Update the goalPose orientation with the calculated yaw
+        quaternion = quaternion_from_euler(0, 0, yaw)
+        goalPose.pose.orientation = Quaternion(
+            x=quaternion[0], y=quaternion[1], z=quaternion[2], w=quaternion[3]
+        )
 
         # Navigate to the chosen frontier
-        self.navigate_to(goal_x, goal_y)
+        self.navigate_to(goal_x, goal_y, yaw)
 
     def find_casualties(self):
         self.grid = np.where(self.grid > 90, 0, self.grid)  # Ignore unexplored/wall cells
