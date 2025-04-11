@@ -138,6 +138,8 @@ class CasualtySaver(Node):
     def launch_callback(self, future):
         try:
             response = future.result()  # Get the response from the service call
+            # Update saving_in_progress to continue saving the next target
+            self.saving_in_progress = False
         except Exception as e:
             self.get_logger().error(f"launch service call failed: {e}")
     
@@ -337,12 +339,7 @@ class CasualtySaver(Node):
         self.get_logger().info(f"Spin completed with result: {result}")
         self.nav_in_progress = False
         self.launch_now()
-
-        # Wait for the flare to finish launching
-        # TODO: use launcher's service response to determine when the flare is launched
-        sleep(8)    
-
-        self.saving_in_progress = False
+        
 
 
     #########################################################################################3
