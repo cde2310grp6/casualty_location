@@ -30,7 +30,7 @@ DELAY_IR = 0.7  # Delay in seconds for IR data processing
 
 CASUALTY_COUNT = 2 # Number of casualties to find
 
-GAZEBO = False # Set to True if running in Gazebo simulation
+DIST_TO_CASUALTY = 2.5 # Distance to casualty before stopping to fire
 
 class BotPose(object):
     def __init__(self, x, y, yaw):
@@ -54,8 +54,16 @@ class FinderNode(Node):
         self.nav_in_progress = False
         self.exploring = True
         self.painting = False
+
+        if not self.has_parameter('use_sim_time'):
+            self.declare_parameter('use_sim_time', False)
+
+        use_sim_time = self.get_parameter('use_sim_time').get_parameter_value().bool_value
+        self.GAZEBO = use_sim_time
+
+
         
-        if not GAZEBO:
+        if not self.GAZEBO:
             self.ir_sub = self.create_subscription(String, '/ir_data', self.ir_callback, 10)
             self.latest_ir_data = None
         else:
@@ -157,7 +165,7 @@ class FinderNode(Node):
         #self.get_logger().info(f"Robot Pose: {pose}")
         clean_pose_cache(self)
 
-        if GAZEBO:
+        if self.GAZEBO:
             self.paint_wall()
             self.update_plot()
 
@@ -280,7 +288,7 @@ class FinderNode(Node):
                 #self.get_logger().info(f"Distance to closest wall at ({new_x}, {new_y}): {distance_to_wall}")
 
                 # If the distance exceeds 19, return the current waypoint
-                if 0 < new_x < cols and 0 < new_y < rows and 0.0 <= self.grid[new_y][new_x] < 10 and distance_to_wall > 3.0:
+                if 0 < new_x < cols and 0 < new_y < rows and 0.0 <= self.grid[new_y][new_x] < 10 and distance_to_wall > DIST_TO_CASUALTY:
                     #self.get_logger().info(f"Valid goal found at ({new_x}, {new_y}) with distance {distance_to_wall}")
                     waypoint.pose.position.x = float(new_x)
                     waypoint.pose.position.y = float(new_y)
@@ -329,7 +337,7 @@ class FinderNode(Node):
                             # Check if the next cell is also a wall (100) and hasn't been thermally scanned yet
                         row = int(round(cx + (step+1) * dy)) 
                         col = int(round(cy + (step+1) * dx))
-                        if 0 <= row < rows and 0 <= col < cols:
+                        if 0 <= row < rows-1 and 0 <= col < cols-1:
                             if self.grid[row][col] > 90:
                                 self.grid[row][col] = interpolated_data[idx]
                         break

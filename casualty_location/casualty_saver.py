@@ -33,9 +33,10 @@ from nav_msgs.msg import OccupancyGrid
 from nav2_msgs.action import Spin
 from rclpy.duration import Duration
 
-
-
 import numpy as np
+
+
+DIST_TO_CASUALTY = 2.5  # Distance to casualty before stopping to fire
 
 
 
@@ -66,7 +67,6 @@ class CasualtySaver(Node):
         # for spin_face_target
         self.spin_client = ActionClient(self, Spin, 'spin')
 
-
         # get map res for rviz marker
         self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, 10)
         self.map_data = None
@@ -77,6 +77,13 @@ class CasualtySaver(Node):
 
          # for showing casualty locations in rviz
         self.cas_marker = rviz_marker.RvizMarker()
+
+        if not self.has_parameter('use_sim_time'):
+            self.declare_parameter('use_sim_time', False)
+
+        use_sim_time = self.get_parameter('use_sim_time').get_parameter_value().bool_value
+        self.simulating = use_sim_time
+
 
         self.curr_target = None
 
@@ -99,6 +106,18 @@ class CasualtySaver(Node):
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
         self.robot_position = (x, y)
+        # extract quaternion
+        orientation_q = msg.pose.pose.orientation
+        quaternion = (
+            orientation_q.x,
+            orientation_q.y,
+            orientation_q.z,
+            orientation_q.w
+        )
+
+        # convert to euler angles
+        _, _, yaw = euler_from_quaternion(quaternion)
+        self.robot_yaw = yaw  # in radians
 
 
     def map_callback(self, msg):
@@ -138,6 +157,8 @@ class CasualtySaver(Node):
     def launch_callback(self, future):
         try:
             response = future.result()  # Get the response from the service call
+            # Update saving_in_progress to continue saving the next target
+            self.saving_in_progress = False
         except Exception as e:
             self.get_logger().error(f"launch service call failed: {e}")
     
@@ -240,7 +261,7 @@ class CasualtySaver(Node):
                 self.get_logger().info(f"Distance to closest wall at ({new_x}, {new_y}): {distance_to_wall}")
 
                 # If the distance exceeds 19, return the current waypoint
-                if 0 < new_x < cols and 0 < new_y < rows and self.occGrid[new_y][new_x] != -1 and distance_to_wall > 2.5:
+                if 0 < new_x < cols and 0 < new_y < rows and self.occGrid[new_y][new_x] != -1 and distance_to_wall > DIST_TO_CASUALTY:
                     self.get_logger().info(f"Valid goal found at ({new_x}, {new_y}) with distance {distance_to_wall}")
                     waypoint.pose.position.x = float(new_x)
                     waypoint.pose.position.y = float(new_y)
@@ -307,15 +328,21 @@ class CasualtySaver(Node):
         y = self.curr_target.pose.position.y * self.map_data.info.resolution + self.map_data.info.origin.position.y
 
         robot_x, robot_y = self.robot_position
-        yaw = math.atan2(y - robot_y, x - robot_x)  # Direct the robot towards the target
+        target_yaw = math.atan2(y - robot_y, x - robot_x)  
+
+        current_yaw = self.robot_yaw
+
+        # compute relative angle (shortest rotation direction)
+        delta_yaw = target_yaw - current_yaw
+        delta_yaw = math.atan2(math.sin(delta_yaw), math.cos(delta_yaw))  # normalize to [-pi, pi]
        
         spin_goal = Spin.Goal()
-        spin_goal.target_yaw = yaw  # 360 degrees
+        spin_goal.target_yaw = delta_yaw
         spin_goal.time_allowance = Duration(seconds=6.0).to_msg()
 
         self.get_logger().info(f"Robot position: ({robot_x}, {robot_y})")
         self.get_logger().info(f"Target position: ({x}, {y})")
-        self.get_logger().info(f"Computed yaw: {yaw} rad, {math.degrees(yaw)} deg")
+        self.get_logger().info(f"Computed yaw: {delta_yaw} rad, {math.degrees(delta_yaw)} deg")
 
 
         self.get_logger().info("Sending spin goal (FACE TO TARGET)...")
@@ -337,12 +364,11 @@ class CasualtySaver(Node):
         self.get_logger().info(f"Spin completed with result: {result}")
         self.nav_in_progress = False
         self.launch_now()
-
-        # Wait for the flare to finish launching
-        # TODO: use launcher's service response to determine when the flare is launched
-        sleep(8)    
-
-        self.saving_in_progress = False
+        if self.simulating:
+            self.get_logger().info("Waiting for 3 seconds to simulate saving...")
+            sleep(3.0)
+            self.saving_in_progress = False
+        
 
 
     #########################################################################################3
