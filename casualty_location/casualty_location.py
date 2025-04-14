@@ -84,6 +84,7 @@ class FinderNode(Node):
         self.origin_index = round(ORIGIN_CACHE_SIZE - DELAY_IR * MAP_RATE -1) # Index of the origin to use for navigation
 
         self.visited_frontiers = set()
+        self.recent_frontier = []
         self.costmap = None
 
         self.casualties = []
@@ -466,12 +467,19 @@ class FinderNode(Node):
         return costmap
 
     def choose_frontier(self, costmap):
+        if self.recent_frontier is not None:
+            for i in range(costmap):
+                for j in range(costmap[0]):
+                    dist = np.sqrt((i - self.recent_frontier[0])**2 + (j - self.recent_frontier[1])**2)
+                    if dist < 5: #change this to change ignore radius
+                        costmap[i, j] = 0
         max_value_index = np.argmax(costmap)
         row = max_value_index // costmap.shape[1]
         col = max_value_index % costmap.shape[1]
         if costmap[row, col] <= 0:
             return None
         self.visited_frontiers.add((row, col))
+        self.recent_frontier = [row, col]
         return (row, col)
 
     def init_costmap_plot(self):
