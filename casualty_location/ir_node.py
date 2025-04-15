@@ -12,7 +12,7 @@ from std_msgs.msg import String
 class IRPubNode(Node):
     def __init__(self):
         super().__init__('ir_pub_node')
-        self.publisher = self.create_publisher(String, 'ir_raw_data', 10)
+        self.publisher = self.create_publisher(String, 'ir_data', 10)
 
         self.sensor = self.initialize_sensor()
         if self.sensor is None:
@@ -55,7 +55,7 @@ class IRPubNode(Node):
 
             # Publish the result as a 1D array
             msg = String()
-            msg.data = max_in_columns  # Convert to list and publish
+            msg.data = str(max_in_columns)  # Convert to list and publish
             self.publisher.publish(msg)
             self.get_logger().info(f"Publishing IR data: {msg.data}")
 
