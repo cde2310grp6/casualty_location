@@ -5,6 +5,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
+from custom_msg_srv.msg import IrRaw
 
 # Debugging values removed
 
@@ -51,11 +52,11 @@ class IRPubNode(Node):
                 z = np.delete(z, 0, axis=0)
 
             # Get the highest value from each column
-            max_in_columns = np.max(z, axis=0)  # Max value per column
+            #max_in_columns = np.max(z, axis=0)  # Max value per column
 
             # Publish the result as a 1D array
-            msg = String()
-            msg.data = max_in_columns  # Convert to list and publish
+            msg = IrRaw
+            msg.ir_data = pixels  # Convert to list and publish
             self.publisher.publish(msg)
             self.get_logger().info(f"Publishing IR data: {msg.data}")
 
