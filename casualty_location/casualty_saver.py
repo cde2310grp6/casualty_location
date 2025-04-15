@@ -10,6 +10,8 @@ from geometry_msgs.msg import Quaternion
 
 # for self.robot_position
 from nav_msgs.msg import Odometry
+from geometry_msgs.msg import PoseWithCovarianceStamped
+
 import math
 
 from time import sleep
@@ -36,7 +38,7 @@ from rclpy.duration import Duration
 import numpy as np
 
 
-DIST_TO_CASUALTY = 2.5  # Distance to casualty before stopping to fire
+DIST_TO_CASUALTY = 3.0  # Distance to casualty before stopping to fire
 
 
 
@@ -62,7 +64,10 @@ class CasualtySaver(Node):
         self.cas_save_pub = self.create_publisher(CasualtySaveStatus, 'casualty_saved', 10)
 
         # get self.robot_position
-        self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
+        # self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
+        # change to pose instead of odom
+        self.pose_sub = self.create_subscription(PoseWithCovarianceStamped, '/pose', self.pose_callback, 10)
+
 
         # for spin_face_target
         self.spin_client = ActionClient(self, Spin, 'spin')
@@ -87,6 +92,8 @@ class CasualtySaver(Node):
 
         self.curr_target = None
 
+        self.robot_yaw = None
+
 
     def start_casualty_callback(self, request, response):
         if request.state == "SAVE":
@@ -96,13 +103,13 @@ class CasualtySaver(Node):
         else:
             try:
                 self.save_timer.cancel()
-            except AttributeError:
+            except:
                 # no timer to cancel
                 pass
 
         return response
 
-    def odom_callback(self, msg):
+    def pose_callback(self, msg):
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
         self.robot_position = (x, y)
@@ -165,7 +172,8 @@ class CasualtySaver(Node):
 
     # this function could fail if the casualty_loc is not published in time
     def save_casualty(self):
-        if not self.saving_in_progress:
+        if not self.saving_in_progress and self.robot_yaw != None: 
+            # if pose has not been published yet, do not continue
             if len(self.waypoints) > 0:
                 self.saving_in_progress = True
                 self.curr_target = self.waypoints.pop(0)
@@ -184,6 +192,10 @@ class CasualtySaver(Node):
         else:
             pass
             # waiting for current task to be completed...
+
+        if self.robot_yaw == None:
+            self.get_logger().warn("Robot yaw not available. Waiting for pose to be published.")
+            return
 
 
     def transform_to_valid_goal(self, waypoint):
@@ -338,10 +350,13 @@ class CasualtySaver(Node):
        
         spin_goal = Spin.Goal()
         spin_goal.target_yaw = delta_yaw
-        spin_goal.time_allowance = Duration(seconds=6.0).to_msg()
+        spin_goal.time_allowance = Duration(seconds=15.0).to_msg()
 
         self.get_logger().info(f"Robot position: ({robot_x}, {robot_y})")
         self.get_logger().info(f"Target position: ({x}, {y})")
+        self.get_logger().info(f"Current yaw: {current_yaw} rad, {math.degrees(current_yaw)} deg")
+        self.get_logger().info(f"Target yaw: {target_yaw} rad, {math.degrees(target_yaw)} deg")
+        self.get_logger().info(f"spin_goal_target_yaw: {spin_goal.target_yaw}")
         self.get_logger().info(f"Computed yaw: {delta_yaw} rad, {math.degrees(delta_yaw)} deg")
 
 
@@ -376,7 +391,10 @@ class CasualtySaver(Node):
     # feedback for when goalPose is reached
     def nav_result_callback(self, future):
         result = future.result().result
+        sleep(5.0)
         self.spin_face_target()
+        # self.launch_now()
+        # self.nav_in_progress = False
 
 
 
