@@ -5,6 +5,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
+from custom_msg_srv.msg import IrRaw
 
 # Debugging values removed
 
