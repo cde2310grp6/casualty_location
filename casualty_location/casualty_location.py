@@ -93,6 +93,8 @@ class FinderNode(Node):
 
         self.fig, self.ax = None, None
         self.robot_marker, self.robot_arrow = None, None
+        
+        self.is_spinning = False
         plt.ion()
 
 
@@ -323,6 +325,12 @@ class FinderNode(Node):
         if self.mission_state != "LOCATE" or self.painting == True:
             return
 
+        # Only proceed to paint walls if the robot is spinning
+        # it is most accurate when spinning rather than moving
+        if not self.is_spinning:
+            self.get_logger().info("Not spinning, not painting walls")
+            return
+
         if not self.map_received or not self.pose_cache_full or not self.origin_cache_full:
             return
         self.painting = True
@@ -365,6 +373,8 @@ class FinderNode(Node):
         self.painting = False
 
     def spin_360(self):
+        self.is_spinning = True
+
         if not self.spin_client.wait_for_server(timeout_sec=5.0):
             self.get_logger().error("Spin action server not available!")
             return
@@ -434,6 +444,7 @@ class FinderNode(Node):
         result = future.result().result
         self.get_logger().info(f"Spin completed with result: {result}")
         self.nav_in_progress = False
+        self.is_spinning = False
 
     def generate_costmap(self, grid, visited_frontiers, threshold=90):
         """
