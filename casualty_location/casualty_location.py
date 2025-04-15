@@ -4,7 +4,6 @@ from rclpy.action import ActionClient
 from nav_msgs.msg import OccupancyGrid
 from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped
-from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav2_msgs.action import NavigateToPose
 from scipy.interpolate import interp1d
 import numpy as np
@@ -27,14 +26,14 @@ POSE_CACHE_SIZE = 20  # Number of poses to keep in the cache
 ODOM_RATE = 20.0 # Rate of odometry updates in Hz
 ORIGIN_CACHE_SIZE = 1 # Number of origin poses to keep in the cache
 MAP_RATE = 0.5 # Rate of map updates in Hz
-DELAY_IR = 0.5  # Delay in seconds for IR data processing
+DELAY_IR = 0.7  # Delay in seconds for IR data processing
 
-CASUALTY_COUNT = 1 # Number of casualties to find
+CASUALTY_COUNT = 2 # Number of casualties to find
 
-DIST_TO_CASUALTY = 4.0 # Distance to casualty before stopping to fire
+DIST_TO_CASUALTY = 2.5 # Distance to casualty before stopping to fire
 
 class BotPose(object):
-    def __init__(self, x=0, y=0, yaw=0):
+    def __init__(self, x, y, yaw):
         self.x = x
         self.y = y
         self.yaw = yaw
@@ -85,7 +84,7 @@ class FinderNode(Node):
         self.origin_index = round(ORIGIN_CACHE_SIZE - DELAY_IR * MAP_RATE -1) # Index of the origin to use for navigation
 
         self.visited_frontiers = set()
-        self.recent_frontier = None
+        self.recent_frontier = []
         self.costmap = None
 
         self.casualties = []
@@ -117,10 +116,7 @@ class FinderNode(Node):
             self.mission_state = "LOCATE"
             self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, 10)
             self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
-            self.pose_sub = self.create_subscription(PoseWithCovarianceStamped, '/pose', self.pose_callback, 10)
             self.explore_timer = self.create_timer(1.0, self.explore)
-            self.offset = BotPose()
-            self.odom_pose = BotPose()
 
         else:
             self.mission_state = "STOPPED"
@@ -151,44 +147,30 @@ class FinderNode(Node):
             self.init_plot()
 
     def odom_callback(self, msg):
-
         def clean_pose_cache(self):
             # Remove old poses from the cache
             if len(self.robot_cache) > POSE_CACHE_SIZE:
                 self.robot_cache.pop(0)
                 self.pose_cache_full = True
     
-        self.odom_pose.x = msg.pose.pose.position.x
-        self.odom_pose.y = msg.pose.pose.position.y
+        x = msg.pose.pose.position.x
+        y = msg.pose.pose.position.y
+        self.robot_position = (x, y)
 
         orientation_q = msg.pose.pose.orientation
         quaternion = (orientation_q.x, orientation_q.y, orientation_q.z, orientation_q.w)
-        _, _, self.odom_pose.yaw = euler_from_quaternion(quaternion)
+        _, _, yaw = euler_from_quaternion(quaternion)
+        self.robot_yaw = yaw
 
         self.pose_received = True
-        pose = BotPose(self.odom_pose.x-self.offset.x, self.odom_pose.y-self.offset.y, self.odom_pose.yaw-self.offset.yaw) #offset correction
-        self.robot_position = (pose.x,pose.y) #corrected values
-        self.robot_yaw = pose.yaw
+        pose = BotPose(x, y, yaw)
         self.robot_cache.append(pose)
+        #self.get_logger().info(f"Robot Pose: {pose}")
         clean_pose_cache(self)
 
         if self.GAZEBO:
             self.paint_wall()
             self.update_plot()
-
-
-    ###
-    ## This function is used to correct the pose of the robot based on the AMCL pose
-    ## It calculates the offset between the odometry pose and the AMCL pose and stores it in self.offset
-    ## i.e. AMCL_pose + offset == Odom_pose
-
-    def pose_callback(self, msg):
-        self.offset.x = self.odom_pose.x - msg.pose.pose.position.x
-        self.offset.y = self.odom_pose.y - msg.pose.pose.position.y
-        orientation_q = msg.pose.pose.orientation
-        quaternion = (orientation_q.x, orientation_q.y, orientation_q.z, orientation_q.w)
-        _, _, amcl_yaw = euler_from_quaternion(quaternion)
-        self.offset.yaw = self.odom_pose.yaw - amcl_yaw
 
     def ir_callback(self,msg):
         if not self.exploring:
@@ -353,7 +335,7 @@ class FinderNode(Node):
             dx = math.cos(rad_angle)
             dy = math.sin(rad_angle)
 
-            for step in range(1,18):
+            for step in range(1,40):
                 row = int(round(cx + step * dy))
                 col = int(round(cy + step * dx))
 
@@ -484,18 +466,21 @@ class FinderNode(Node):
                 # Assign score to all cells in this region
                 for cr, cc in region_cells:
                     dist = np.sqrt((cr - robot_r)**2 + (cc - robot_c)**2)
-                    score = (region_size - 5) / (dist + 1.0)  # +1 to avoid div by zero
+                    score = (region_size - 10) / (dist + 1.0)  # +1 to avoid div by zero
                     costmap[cr, cc] = score
 
         for row, col in visited_frontiers:
             costmap[row, col] = 0  # Mark visited frontiers as invalid
 
+        # Update the costmap plot
+        self.update_costmap_plot(costmap)
+
         return costmap
 
     def choose_frontier(self, costmap):
         if self.recent_frontier is not None:
-            for i in range(len(costmap)):
-                for j in range(len(costmap[0])):
+            for i in range(costmap):
+                for j in range(costmap[0]):
                     dist = np.sqrt((i - self.recent_frontier[0])**2 + (j - self.recent_frontier[1])**2)
                     if dist < 5: #change this to change ignore radius
                         costmap[i, j] = 0
@@ -547,9 +532,6 @@ class FinderNode(Node):
 
         # Generate costmap and choose a frontier
         self.costmap = self.generate_costmap(self.grid, self.visited_frontiers, threshold=90)
-        # Update the costmap plot
-        self.update_costmap_plot(self.costmap)
-
         chosen_frontier = self.choose_frontier(self.costmap)
         if chosen_frontier is None:
             self.get_logger().info("No frontiers found. Location complete!")
