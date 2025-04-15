@@ -56,7 +56,7 @@ class IRPubNode(Node):
 
             # Publish the result as a 1D array
             msg = String()
-            msg.data = str(max_in_columns)  # Convert to list and publish
+            msg.data = str(max_in_columns.tolist())  # Convert to list and publish
             self.publisher.publish(msg)
             self.get_logger().info(f"Publishing IR data: {msg.data}")
 

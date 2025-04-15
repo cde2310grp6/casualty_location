@@ -30,7 +30,7 @@ DELAY_IR = 0.7  # Delay in seconds for IR data processing
 
 CASUALTY_COUNT = 2 # Number of casualties to find
 
-DIST_TO_CASUALTY = 2.5 # Distance to casualty before stopping to fire
+DIST_TO_CASUALTY = 2.80 # Distance to casualty before stopping to fire
 
 class BotPose(object):
     def __init__(self, x, y, yaw):
@@ -175,7 +175,8 @@ class FinderNode(Node):
         if not self.exploring:
             return
         try:
-            ir_values = eval(msg.data)
+            clean_data = msg.data.replace(" ", ",")
+            ir_values = eval(clean_data)
             self.latest_ir_data = ir_values
             self.paint_wall()
             self.update_plot()
