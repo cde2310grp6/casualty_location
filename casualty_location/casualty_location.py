@@ -175,8 +175,7 @@ class FinderNode(Node):
         if not self.exploring:
             return
         try:
-            clean_data = msg.data.replace(" ", ",")
-            ir_values = eval(clean_data)
+            ir_values = eval(msg.data)
             self.latest_ir_data = ir_values
             self.paint_wall()
             self.update_plot()
