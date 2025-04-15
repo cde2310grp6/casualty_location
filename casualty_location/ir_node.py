@@ -45,7 +45,15 @@ class IRPubNode(Node):
         pix_to_read = 64
         pix_res = (8, 8)
 
-        status, pixels = self.sensor.read_temp(pix_to_read)
+        # error handling in case i2c gets disconnected again
+        try:
+            status, pixels = self.sensor.read_temp(pix_to_read)
+        except OSError as e:
+            self.get_logger().error(f"I2C read failed: {e} — retrying sensor init")
+            self.sensor = self.initialize_sensor()
+            if self.sensor is None:
+                self.get_logger().error("Sensor reconnection failed")
+            return  # Skip this timer cycle
 
         if not status:
             z = np.reshape(pixels, pix_res)

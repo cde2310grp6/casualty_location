@@ -329,9 +329,9 @@ class FinderNode(Node):
 
         # Only proceed to paint walls if the robot is spinning
         # it is most accurate when spinning rather than moving
-        if not self.is_spinning:
-            # self.get_logger().info("Not spinning, not painting walls")
-            return
+        # if not self.is_spinning:
+        #     # self.get_logger().info("Not spinning, not painting walls")
+        #     return
 
         if not self.map_received or not self.pose_cache_full or not self.origin_cache_full:
             return
@@ -355,7 +355,7 @@ class FinderNode(Node):
             dx = math.cos(rad_angle)
             dy = math.sin(rad_angle)
 
-            for step in range(1,18):
+            for step in range(1,20):
                 row = int(round(cx + step * dy))
                 col = int(round(cy + step * dx))
 
@@ -519,7 +519,7 @@ class FinderNode(Node):
         """Initialize the costmap plot."""
         self.costmap_fig, self.costmap_ax = plt.subplots(figsize=(8, 8))
         self.costmap_im = self.costmap_ax.imshow(
-            np.zeros((1, 1)), cmap='hot', origin='lower', vmin=0, vmax=1
+            np.zeros((1, 1)), cmap=cmap, origin='lower', vmin=0, vmax=1
         )
         self.costmap_ax.set_title("Costmap")
         plt.show(block=False)
@@ -597,7 +597,7 @@ class FinderNode(Node):
     def find_casualties(self):
         self.grid = np.where(self.grid > 90, 0, self.grid)  # Ignore unexplored/wall cells
 
-        def find_top_hotspots(grid_array, count=CASUALTY_COUNT, neighborhood=2, suppress_radius=10):
+        def find_top_hotspots(grid_array, count=CASUALTY_COUNT, neighborhood=5, suppress_radius=20):
             rows, cols = grid_array.shape
             grid_avg = np.zeros_like(grid_array)
 
@@ -626,12 +626,10 @@ class FinderNode(Node):
                 hotspots.append((hottest_i, hottest_j, hottest_value))
 
                 # Suppress surrounding region
-                for offset_i in range(-suppress_radius, suppress_radius + 1):
-                    for offset_j in range(-suppress_radius, suppress_radius + 1):
-                        i, j = hottest_i + offset_i, hottest_j + offset_j
-                        if 0 <= i < rows and 0 <= j < cols:
+                for i in range(len(grid_avg)):
+                    for j in range(len(grid_avg[0])):
+                        if sqrt((i-hottest_i)**2 + (j - hottest_j)**2) < suppress_radius:
                             grid_avg[i][j] = 0
-
             return hotspots
 
         # Find hotspots

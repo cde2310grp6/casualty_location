@@ -23,6 +23,9 @@ from custom_msg_srv.srv import StartCasualtyService
 # for launcher service
 from std_srvs.srv import Trigger 
 
+# for comms with aligner_node
+from std_msgs.msg import Bool
+
 # for casualty locations
 from custom_msg_srv.msg import ArrayCasualtyPos
 
@@ -59,6 +62,13 @@ class CasualtySaver(Node):
         # service for mission_control to initiate casualty_location
         self.start_casualty_service = self.create_service(StartCasualtyService, 'casualty_state', self.start_casualty_callback)
         self.mission_state = "STOPPED"
+
+        # comms with aligner_node
+        self.aligner_trigger_pub = self.create_publisher(Bool, '/align_now', 10)
+        self.aligner_done_sub = self.create_subscription(Bool, '/align_complete', self.align_done_callback, 10)
+        self.align_complete = False
+        self.align_service_call = self.create_client(Trigger, 'aligner_service_call')
+
 
         # topic to tell mission_control when casualty_location complete
         self.cas_save_pub = self.create_publisher(CasualtySaveStatus, 'casualty_saved', 10)
@@ -150,6 +160,8 @@ class CasualtySaver(Node):
             self.get_logger().info(f"Publishing casualty marker at {disp_cas}")
         self.cas_marker.publish_marker_array(disp_cas)
 
+
+
     def launch_now(self):
         self.get_logger().info("calling launcher")
         self.req = Trigger.Request()
@@ -168,6 +180,32 @@ class CasualtySaver(Node):
             self.saving_in_progress = False
         except Exception as e:
             self.get_logger().error(f"launch service call failed: {e}")
+
+    def align_callback(self, msg):
+        self.align_complete = msg.data
+        if self.align_complete:
+            self.get_logger().info("Alignment complete.")
+            # trigger the launcher service
+            self.launch_now()
+            self.align_complete = False
+
+    def trigger_alignment(self):
+        self.get_logger().info("calling aligner")
+        self.req = Trigger.Request()
+        # Ensure service is available
+        if not self.launcher_service.wait_for_service(timeout_sec=5.0):
+            self.get_logger().warning('aligner service not available')
+            return
+        # Call the service asynchronously and handle the response when ready
+        future = self.launcher_service.call_async(self.req)
+        future.add_done_callback(self.launch_callback)
+
+    def align_done_callback(self, msg):
+        if msg.data == True:
+            self.get_logger().info('Alignment started.')
+        else:
+            self.get_logger().info('Alignment not called.')
+        # if the robot is not aligned, do not launch the ball
     
 
     # this function could fail if the casualty_loc is not published in time
@@ -378,14 +416,13 @@ class CasualtySaver(Node):
         result = future.result().result
         self.get_logger().info(f"Spin completed with result: {result}")
         self.nav_in_progress = False
-        self.launch_now()
+        # trigger aligner to start alignment
+        self.trigger_alignment()
         if self.simulating:
             self.get_logger().info("Waiting for 3 seconds to simulate saving...")
             sleep(3.0)
             self.saving_in_progress = False
         
-
-
     #########################################################################################3
 
     # feedback for when goalPose is reached
