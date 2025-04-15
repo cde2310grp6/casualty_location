@@ -9,6 +9,10 @@ class RvizMarker(Node):
         self.marker_pub = self.create_publisher(Marker, 'frontier_chosen_marker', 10)
         self.marker_array_pub = self.create_publisher(MarkerArray, 'frontier_all_marker', 10)
 
+        self.curr_loc_pub = self.create_publisher(Marker, 'curr_loc_pub', 10)
+        self.target_loc_pub = self.create_publisher(Marker, 'target_loc_pub', 10)
+
+
         # used for deleting previous markers
         self.prev_marker_array = None
 

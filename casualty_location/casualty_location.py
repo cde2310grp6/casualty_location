@@ -95,6 +95,8 @@ class FinderNode(Node):
         self.robot_marker, self.robot_arrow = None, None
         
         self.is_spinning = False
+
+        self.didPaint = False
         plt.ion()
 
 
@@ -328,7 +330,7 @@ class FinderNode(Node):
         # Only proceed to paint walls if the robot is spinning
         # it is most accurate when spinning rather than moving
         if not self.is_spinning:
-            self.get_logger().info("Not spinning, not painting walls")
+            # self.get_logger().info("Not spinning, not painting walls")
             return
 
         if not self.map_received or not self.pose_cache_full or not self.origin_cache_full:
@@ -361,12 +363,14 @@ class FinderNode(Node):
                     if self.grid[row][col] > 10:
                         if self.grid[row][col] > 90:
                             self.grid[row][col] = interpolated_data[idx]
+                            self.didPaint = True
                             # Check if the next cell is also a wall (100) and hasn't been thermally scanned yet
                         row = int(round(cx + (step+1) * dy)) 
                         col = int(round(cy + (step+1) * dx))
                         if 0 <= row < rows-1 and 0 <= col < cols-1:
                             if self.grid[row][col] > 90:
                                 self.grid[row][col] = interpolated_data[idx]
+                                self.didPaint = True
                         break
                 else:
                     break
@@ -374,6 +378,7 @@ class FinderNode(Node):
 
     def spin_360(self):
         self.is_spinning = True
+        self.didPaint = False
 
         if not self.spin_client.wait_for_server(timeout_sec=5.0):
             self.get_logger().error("Spin action server not available!")
@@ -445,6 +450,8 @@ class FinderNode(Node):
         self.get_logger().info(f"Spin completed with result: {result}")
         self.nav_in_progress = False
         self.is_spinning = False
+        if self.didPaint == False:
+            self.get_logger().info("++++++++++++++++++++++++DID NOT PAINT!")
 
     def generate_costmap(self, grid, visited_frontiers, threshold=90):
         """
