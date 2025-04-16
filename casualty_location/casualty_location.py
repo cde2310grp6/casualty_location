@@ -341,18 +341,13 @@ class FinderNode(Node):
                                                     
                 if 0 <= row < rows and 0 <= col < cols:
                     if self.grid[row][col] > 10:
-                        if self.grid[row][col] > 90:
+                        if self.grid[row][col] > 90 or interpolated_data[idx] > self.grid[row][col]:
                             self.grid[row][col] = interpolated_data[idx]
-                            # Check if the next cell is also a wall (100) and hasn't been thermally scanned yet
-                        else:
-                            self.grid[row][col] = self.grid[row][col] * 0.7 + interpolated_data[idx] * 0.3
                         # Check if the next cell is also a wall (100) and hasn't been thermally scanned yet
                         row = int(round(bot_row + (step+1) * dy)) 
                         col = int(round(bot_col + (step+1) * dx))
                         if 0 <= row < rows and 0 <= col < cols:
-                            if self.grid[row][col] > 10 and self.grid[row][col] < 90:
-                                self.grid[row][col] = self.grid[row][col] * 0.7 + interpolated_data[idx] * 0.3
-                            if self.grid[row][col] > 90:
+                            if self.grid[row][col] > 10 and (self.grid[row][col] > 90 or interpolated_data[idx] > self.grid[row][col]):
                                 self.grid[row][col] = interpolated_data[idx]
                         break
                 else:
@@ -575,7 +570,7 @@ class FinderNode(Node):
     def find_casualties(self):
         self.grid = np.where(self.grid > 90, 0, self.grid)  # Ignore unexplored/wall cells
 
-        def find_top_hotspots(grid_array, count=CASUALTY_COUNT, neighborhood=5, suppress_radius=20):
+        def find_top_hotspots(grid_array, count=CASUALTY_COUNT, neighborhood=2, suppress_radius=10):
             rows, cols = grid_array.shape
             grid_avg = np.zeros_like(grid_array)
 
