@@ -308,16 +308,16 @@ class FinderNode(Node):
 
         # Only proceed to paint walls if the robot is spinning
         # it is most accurate when spinning rather than moving
-        if not self.is_spinning:
-            self.get_logger().info("Not spinning, not painting walls")
-            return
+        #if not self.is_spinning:
+        #    self.get_logger().info("Not spinning, not painting walls")
+        #    return
 
         if not self.map_received or not self.pose_cache_full or not self.origin_cache_full:
             return
         self.painting = True
-        cy = int((self.robot_cache[self.pose_index].x - self.origin[0]) / self.resolution)
-        cx = int((self.robot_cache[self.pose_index].y - self.origin[1]) / self.resolution)
-        cols, rows = self.map_data.info.height, self.map_data.info.width
+        bot_col = int((self.robot_cache[self.pose_index].x - self.origin[0]) / self.resolution)
+        bot_row = int((self.robot_cache[self.pose_index].y - self.origin[1]) / self.resolution)
+        rows, cols = self.map_data.info.height, self.map_data.info.width
 
         start_angle = math.degrees(self.robot_cache[self.pose_index].yaw) - SENSOR_FOV / 2
         end_angle = math.degrees(self.robot_cache[self.pose_index].yaw) + SENSOR_FOV / 2
@@ -335,17 +335,17 @@ class FinderNode(Node):
             dy = math.sin(rad_angle)
 
             for step in range(1,40):
-                row = int(round(cx + step * dy))
-                col = int(round(cy + step * dx))
-
+                row = int(round(bot_row + step * dy))
+                col = int(round(bot_col + step * dx))
+                                                    
                 if 0 <= row < rows and 0 <= col < cols:
                     if self.grid[row][col] > 10:
                         if self.grid[row][col] > 90:
                             self.grid[row][col] = interpolated_data[idx]
                             # Check if the next cell is also a wall (100) and hasn't been thermally scanned yet
-                        row = int(round(cx + (step+1) * dy)) 
-                        col = int(round(cy + (step+1) * dx))
-                        if 0 <= row < rows-1 and 0 <= col < cols-1:
+                        row = int(round(bot_row + (step+1) * dy)) 
+                        col = int(round(bot_col + (step+1) * dx))
+                        if 0 <= row < rows and 0 <= col < cols:
                             if self.grid[row][col] > 90:
                                 self.grid[row][col] = interpolated_data[idx]
                         break
