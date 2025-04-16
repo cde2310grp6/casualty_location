@@ -28,7 +28,7 @@ ORIGIN_CACHE_SIZE = 1 # Number of origin poses to keep in the cache
 MAP_RATE = 0.5 # Rate of map updates in Hz
 DELAY_IR = 0.7  # Delay in seconds for IR data processing
 
-CASUALTY_COUNT = 2 # Number of casualties to find
+CASUALTY_COUNT = 3 # Number of casualties to find
 
 DIST_TO_CASUALTY = 2.80 # Distance to casualty before stopping to fire
 
@@ -344,9 +344,14 @@ class FinderNode(Node):
                         if self.grid[row][col] > 90:
                             self.grid[row][col] = interpolated_data[idx]
                             # Check if the next cell is also a wall (100) and hasn't been thermally scanned yet
+                        else:
+                            self.grid[row][col] = self.grid[row][col] * 0.7 + interpolated_data[idx] * 0.3
+                        # Check if the next cell is also a wall (100) and hasn't been thermally scanned yet
                         row = int(round(bot_row + (step+1) * dy)) 
                         col = int(round(bot_col + (step+1) * dx))
                         if 0 <= row < rows and 0 <= col < cols:
+                            if self.grid[row][col] > 10 and self.grid[row][col] < 90:
+                                self.grid[row][col] = self.grid[row][col] * 0.7 + interpolated_data[idx] * 0.3
                             if self.grid[row][col] > 90:
                                 self.grid[row][col] = interpolated_data[idx]
                         break
@@ -570,7 +575,7 @@ class FinderNode(Node):
     def find_casualties(self):
         self.grid = np.where(self.grid > 90, 0, self.grid)  # Ignore unexplored/wall cells
 
-        def find_top_hotspots(grid_array, count=CASUALTY_COUNT, neighborhood=2, suppress_radius=10):
+        def find_top_hotspots(grid_array, count=CASUALTY_COUNT, neighborhood=5, suppress_radius=20):
             rows, cols = grid_array.shape
             grid_avg = np.zeros_like(grid_array)
 
