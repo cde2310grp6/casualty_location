@@ -24,7 +24,7 @@ class RvizMarker(Node):
             marker_id=0, 
             marker_type=Marker.SPHERE,  
             orientation = (0.0, 0.0, 0.0, 1.0), 
-            scale = (0.5, 0.5, 0.5), 
+            scale = (0.2, 0.2, 0.2), 
             color = (0.0, 0.6, 0.1, 0.8) #RGB-Alpha
             ):
         marker = Marker()
@@ -57,7 +57,7 @@ class RvizMarker(Node):
         self.marker_pub.publish(self.create_marker(
             position=chosen_frontier, 
             color=(0.6, 0.0, 0.1, 1.0), 
-            scale=(0.6, 0.6, 0.6))
+            scale=(0.3, 0.3, 0.3))
             )
 
     def delete_marker_array(self, marker_array):

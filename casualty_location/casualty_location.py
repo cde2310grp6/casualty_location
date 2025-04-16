@@ -335,7 +335,7 @@ class FinderNode(Node):
             dx = math.cos(rad_angle)
             dy = math.sin(rad_angle)
 
-            for step in range(1,40):
+            for step in range(1,25):
                 row = int(round(bot_row + step * dy))
                 col = int(round(bot_col + step * dx))
                                                     
@@ -515,7 +515,7 @@ class FinderNode(Node):
             return
 
         if self.nav_in_progress:
-            self.get_logger().info("Navigation in progress, cannot choose frontier")
+            # self.get_logger().info("Navigation in progress, cannot choose frontier")
             return None
 
         if self.map_data is None:

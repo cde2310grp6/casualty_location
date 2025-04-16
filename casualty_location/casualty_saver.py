@@ -35,6 +35,9 @@ from rclpy.duration import Duration
 
 import numpy as np
 
+from std_msgs.msg import Bool
+
+
 
 DIST_TO_CASUALTY = 2.5  # Distance to casualty before stopping to fire
 
@@ -49,6 +52,11 @@ class CasualtySaver(Node):
 
         # sub to launcher service
         self.launcher_service = self.create_client(Trigger, 'launch_ball')
+
+        # sub to aligner service
+        self.aligner_service = self.create_client(Trigger, 'aligner_service_call')
+        self.aligner_complete_sub = self.create_subscription(Bool, 'align_complete', self.aligner_update_callback, 10)
+        self.waiting_for_align_comp = False
 
         # sub to casualty locations
         self.casualty_loc = self.create_subscription(ArrayCasualtyPos, 'casualty_locations', self.casualty_callback, 10)
@@ -143,6 +151,30 @@ class CasualtySaver(Node):
             self.get_logger().info(f"Publishing casualty marker at {disp_cas}")
         self.cas_marker.publish_marker_array(disp_cas)
 
+    def aligner_update_callback(self, msg):
+        self.get_logger().info(f"received msg from aligner, align_complete: {msg.data}")
+        if self.waiting_for_align_comp and msg.data == True: # alignment is completed
+            self.waiting_for_align_comp = False
+            self.launch_now()
+
+    def align_now(self):
+        self.get_logger().info("calling aligner")
+        self.req = Trigger.Request()
+        # Ensure service is available
+        if not self.aligner_service.wait_for_service(timeout_sec=5.0):
+            self.get_logger().warning('aligner service not available')
+            return
+        # Call the service asynchronously and handle the response when ready
+        future = self.aligner_service.call_async(self.req)
+        future.add_done_callback(self.align_callback)
+
+    def align_callback(self, future):
+        try:
+            response = future.result()  # Get the response from the service call
+            # Update saving_in_progress to continue saving the next target
+        except Exception as e:
+            self.get_logger().error(f"launch service call failed: {e}")
+
     def launch_now(self):
         self.get_logger().info("calling launcher")
         self.req = Trigger.Request()
@@ -188,7 +220,7 @@ class CasualtySaver(Node):
 
     def transform_to_valid_goal(self, waypoint):
 
-        self.get_logger().info(f"Transforming waypoint to valid goal: {waypoint.pose.position.x}, {waypoint.pose.position.y}")
+        # self.get_logger().info(f"Transforming waypoint to valid goal: {waypoint.pose.position.x}, {waypoint.pose.position.y}")
         # Get the dimensions of the occupancy grid
         rows, cols = self.occGrid.shape
 
@@ -230,7 +262,7 @@ class CasualtySaver(Node):
                                 obstacle_x = nx
                                 obstacle_y = ny
                                 distance = math.sqrt((obstacle_x - x) ** 2 + (obstacle_y - y) ** 2)
-                                self.get_logger().info(f"Closest obstacle found at ({obstacle_x}, {obstacle_y}) with distance {distance}")
+                                # self.get_logger().info(f"Closest obstacle found at ({obstacle_x}, {obstacle_y}) with distance {distance}")
                                 return distance
 
             # If no obstacle is found, return -1
@@ -258,7 +290,7 @@ class CasualtySaver(Node):
 
                 # Check the distance to the closest wall
                 distance_to_wall = dist_to_closest_wall(self, new_x, new_y)
-                self.get_logger().info(f"Distance to closest wall at ({new_x}, {new_y}): {distance_to_wall}")
+                # self.get_logger().info(f"Distance to closest wall at ({new_x}, {new_y}): {distance_to_wall}")
 
                 # If the distance exceeds 19, return the current waypoint
                 if 0 < new_x < cols and 0 < new_y < rows and self.occGrid[new_y][new_x] != -1 and distance_to_wall > DIST_TO_CASUALTY:
@@ -270,10 +302,6 @@ class CasualtySaver(Node):
         # If no valid goal is found, return the original waypoint
         self.get_logger().warning("No valid goal found within the search radius. Returning the original waypoint.")
         return waypoint 
-        
-
-        
-
 
 
     def navigate_to(self, waypoint):
@@ -316,67 +344,12 @@ class CasualtySaver(Node):
         get_result_future = goal_handle.get_result_async()
         get_result_future.add_done_callback(self.nav_result_callback)
 
-    #########################################################################################3
-    # near duplicate of spin_360, but spins to face the target
-
-    def spin_face_target(self):
-        if not self.spin_client.wait_for_server(timeout_sec=5.0):
-            self.get_logger().error("Spin action server not available!")
-            return
-
-        x = self.curr_target.pose.position.x * self.map_data.info.resolution + self.map_data.info.origin.position.x
-        y = self.curr_target.pose.position.y * self.map_data.info.resolution + self.map_data.info.origin.position.y
-
-        robot_x, robot_y = self.robot_position
-        target_yaw = math.atan2(y - robot_y, x - robot_x)  
-
-        current_yaw = self.robot_yaw
-
-        # compute relative angle (shortest rotation direction)
-        delta_yaw = target_yaw - current_yaw
-        delta_yaw = math.atan2(math.sin(delta_yaw), math.cos(delta_yaw))  # normalize to [-pi, pi]
-       
-        spin_goal = Spin.Goal()
-        spin_goal.target_yaw = delta_yaw
-        spin_goal.time_allowance = Duration(seconds=6.0).to_msg()
-
-        self.get_logger().info(f"Robot position: ({robot_x}, {robot_y})")
-        self.get_logger().info(f"Target position: ({x}, {y})")
-        self.get_logger().info(f"Computed yaw: {delta_yaw} rad, {math.degrees(delta_yaw)} deg")
-
-
-        self.get_logger().info("Sending spin goal (FACE TO TARGET)...")
-        future = self.spin_client.send_goal_async(spin_goal)
-        future.add_done_callback(self.spin_face_target_callback)
-
-    def spin_face_target_callback(self, future):
-        goal_handle = future.result()
-        if not goal_handle.accepted:
-            self.get_logger().warn('Spin goal rejected')
-            return
-
-        self.get_logger().info('Spin goal accepted')
-        result_future = goal_handle.get_result_async()
-        result_future.add_done_callback(self.spin_face_target_result)
-
-    def spin_face_target_result(self, future):
-        result = future.result().result
-        self.get_logger().info(f"Spin completed with result: {result}")
-        self.nav_in_progress = False
-        self.launch_now()
-        if self.simulating:
-            self.get_logger().info("Waiting for 3 seconds to simulate saving...")
-            sleep(3.0)
-            self.saving_in_progress = False
-        
-
-
-    #########################################################################################3
-
-    # feedback for when goalPose is reached
+   # feedback for when goalPose is reached
     def nav_result_callback(self, future):
         result = future.result().result
-        self.spin_face_target()
+        # align, then wait for aligner_update_callback to move on to launching
+        self.waiting_for_align_comp = True
+        self.align_now()
 
 
 
