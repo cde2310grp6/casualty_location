@@ -317,7 +317,7 @@ class FinderNode(Node):
         self.painting = True
         cy = int((self.robot_cache[self.pose_index].x - self.origin[0]) / self.resolution)
         cx = int((self.robot_cache[self.pose_index].y - self.origin[1]) / self.resolution)
-        rows, cols = self.map_data.info.height, self.map_data.info.width
+        cols, rows = self.map_data.info.height, self.map_data.info.width
 
         start_angle = math.degrees(self.robot_cache[self.pose_index].yaw) - SENSOR_FOV / 2
         end_angle = math.degrees(self.robot_cache[self.pose_index].yaw) + SENSOR_FOV / 2
@@ -654,3 +654,6 @@ def main(args=None):
         plt.close('all')
         node.destroy_node()
         rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
