@@ -318,7 +318,7 @@ class FinderNode(Node):
         self.painting = True
         bot_col = int((self.robot_cache[self.pose_index].x - self.origin[0]) / self.resolution)
         bot_row = int((self.robot_cache[self.pose_index].y - self.origin[1]) / self.resolution)
-        rows, cols = self.map_data.info.height, self.map_data.info.width
+        rows, cols = len(self.grid), len(self.grid[0])
 
         start_angle = math.degrees(self.robot_cache[self.pose_index].yaw) - SENSOR_FOV / 2
         end_angle = math.degrees(self.robot_cache[self.pose_index].yaw) + SENSOR_FOV / 2
