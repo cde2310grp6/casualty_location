@@ -22,13 +22,13 @@ from custom_msg_srv.msg import CasualtySaveStatus, CasualtyLocateStatus, ArrayCa
 from custom_msg_srv.srv import StartCasualtyService
 
 SENSOR_FOV = 60.0  # Field of view in degrees
-POSE_CACHE_SIZE = 20  # Number of poses to keep in the cache
+POSE_CACHE_SIZE = 10  # Number of poses to keep in the cache
 ODOM_RATE = 20.0 # Rate of odometry updates in Hz
 ORIGIN_CACHE_SIZE = 1 # Number of origin poses to keep in the cache
 MAP_RATE = 0.5 # Rate of map updates in Hz
-DELAY_IR = 0.7  # Delay in seconds for IR data processing
+DELAY_IR = 0.2  # Delay in seconds for IR data processing
 
-CASUALTY_COUNT = 3 # Number of casualties to find
+CASUALTY_COUNT = 2 # Number of casualties to find
 
 DIST_TO_CASUALTY = 2.80 # Distance to casualty before stopping to fire
 
@@ -77,6 +77,7 @@ class FinderNode(Node):
         self.robot_cache = []
         self.pose_cache_full = False
         self.origin = (0, 0)
+        self.initial_origin = (0, 0)
         self.origin_cache = []
         self.origin_cache_full = False
         self.resolution = 0.0
@@ -143,6 +144,7 @@ class FinderNode(Node):
             height = self.map_data.info.height
             self.grid = data.reshape((height, width))
             self.occupancy_grid = data.reshape((height, width))
+            self.initial_origin = self.origin
             self.map_received = True
             self.init_plot()
 
@@ -195,8 +197,8 @@ class FinderNode(Node):
         if not self.map_received or not self.pose_received:
             return
 
-        robot_x = int((self.robot_position[0] - self.origin[0]) / self.resolution)
-        robot_y = int((self.robot_position[1] - self.origin[1]) / self.resolution)
+        robot_x = int((self.robot_position[0] - self.initial_origin[0]) / self.resolution)
+        robot_y = int((self.robot_position[1] - self.initial_origin[1]) / self.resolution)
 
         if self.robot_marker:
             self.robot_marker.remove()
@@ -316,8 +318,8 @@ class FinderNode(Node):
         if not self.map_received or not self.pose_cache_full or not self.origin_cache_full:
             return
         self.painting = True
-        bot_col = int((self.robot_cache[self.pose_index].x - self.origin[0]) / self.resolution)
-        bot_row = int((self.robot_cache[self.pose_index].y - self.origin[1]) / self.resolution)
+        bot_col = int((self.robot_cache[self.pose_index].x - self.initial_origin[0]) / self.resolution)
+        bot_row = int((self.robot_cache[self.pose_index].y - self.initial_origin[1]) / self.resolution)
         rows, cols = len(self.grid), len(self.grid[0])
 
         start_angle = math.degrees(self.robot_cache[self.pose_index].yaw) - SENSOR_FOV / 2
@@ -335,7 +337,7 @@ class FinderNode(Node):
             dx = math.cos(rad_angle)
             dy = math.sin(rad_angle)
 
-            for step in range(1,25):
+            for step in range(1,40):
                 row = int(round(bot_row + step * dy))
                 col = int(round(bot_col + step * dx))
                                                     
@@ -437,8 +439,8 @@ class FinderNode(Node):
         rows, cols = grid.shape
         visited = np.zeros_like(grid, dtype=bool)
         costmap = np.zeros_like(grid, dtype=float)
-        robot_c = int((self.robot_position[0] - self.origin[0]) / self.resolution)
-        robot_r = int((self.robot_position[1] - self.origin[1]) / self.resolution)
+        robot_c = int((self.robot_position[0] - self.initial_origin[0]) / self.resolution)
+        robot_r = int((self.robot_position[1] - self.initial_origin[1]) / self.resolution)
 
         for r in range(rows):
             for c in range(cols):
@@ -466,26 +468,26 @@ class FinderNode(Node):
                 # Assign score to all cells in this region
                 for cr, cc in region_cells:
                     dist = np.sqrt((cr - robot_r)**2 + (cc - robot_c)**2)
-                    score = (region_size - 10) / (dist + 1.0)  # +1 to avoid div by zero
+                    score = max(0,(region_size - 10) / (dist + 1.0))  # +1 to avoid div by zero
                     costmap[cr, cc] = score
 
         for row, col in visited_frontiers:
             costmap[row, col] = 0  # Mark visited frontiers as invalid
 
-        # Update the costmap plot
-        self.update_costmap_plot(costmap)
-
         return costmap
 
     def choose_frontier(self, costmap):
-        avoid_radius = 5
+        avoid_radius = 15
         for i in range(costmap.shape[0]):
             for j in range(costmap.shape[1]):
                 if self.last_frontier is not None and math.sqrt((i - self.last_frontier[0])**2 + (j - self.last_frontier[1])**2) < avoid_radius:
-                    costmap[i][j] = 0
+                    costmap[i][j] = -1
         max_value_index = np.argmax(costmap)
         row = max_value_index // costmap.shape[1]
         col = max_value_index % costmap.shape[1]
+        # Update the costmap plot
+        self.update_costmap_plot(costmap)
+
         if costmap[row, col] <= 0:
             return None
         return (row, col)
@@ -531,6 +533,7 @@ class FinderNode(Node):
         self.costmap = self.generate_costmap(self.grid, self.visited_frontiers, threshold=90)
         chosen_frontier = self.choose_frontier(self.costmap)
         self.last_frontier = chosen_frontier
+        self.visited_frontiers.add(chosen_frontier)
         if chosen_frontier is None:
             self.get_logger().info("No frontiers found. Location complete!")
             self.find_casualties()
@@ -570,7 +573,7 @@ class FinderNode(Node):
     def find_casualties(self):
         self.grid = np.where(self.grid > 90, 0, self.grid)  # Ignore unexplored/wall cells
 
-        def find_top_hotspots(grid_array, count=CASUALTY_COUNT, neighborhood=2, suppress_radius=10):
+        def find_top_hotspots(grid_array, count=CASUALTY_COUNT, neighborhood=2, suppress_radius=25):
             rows, cols = grid_array.shape
             grid_avg = np.zeros_like(grid_array)
 
