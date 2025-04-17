@@ -22,6 +22,7 @@ class IRPubNode(Node):
 
         timer_period = 0.1  # 10 fps
         self.timer = self.create_timer(timer_period, self.timer_callback)
+        self.get_logger().info("IRPubNode initialized and publishing IR data.")
 
     def initialize_sensor(self):
         """ Try initializing the AMG8833 sensor at different I2C addresses. """
@@ -58,7 +59,7 @@ class IRPubNode(Node):
             msg = String()
             msg.data = str(max_in_columns.tolist())  # Convert to list and publish
             self.publisher.publish(msg)
-            self.get_logger().info(f"Publishing IR data: {msg.data}")
+            #self.get_logger().info(f"Publishing IR data: {msg.data}")
 
         else:
             self.get_logger().error("Sensor read failed")

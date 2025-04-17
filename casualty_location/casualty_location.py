@@ -3,7 +3,7 @@ from rclpy.node import Node
 from rclpy.action import ActionClient
 from nav_msgs.msg import OccupancyGrid
 from std_msgs.msg import String
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 from nav2_msgs.action import NavigateToPose
 from scipy.interpolate import interp1d
 import numpy as np
@@ -84,6 +84,9 @@ class FinderNode(Node):
         self.pose_index = round(POSE_CACHE_SIZE - DELAY_IR * ODOM_RATE -1) # Index of the pose to use for navigation
         self.origin_index = round(ORIGIN_CACHE_SIZE - DELAY_IR * MAP_RATE -1) # Index of the origin to use for navigation
 
+        self.amcl_pose = (0,0)
+        self.robot_odom_position = (0,0)
+        self.offset = (0,0)
         self.visited_frontiers = set()
         self.last_frontier = None
         self.costmap = None
@@ -117,6 +120,7 @@ class FinderNode(Node):
             self.mission_state = "LOCATE"
             self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, 10)
             self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
+            self.pose_sub = self.create_subscription(PoseWithCovarianceStamped, '/pose', self.pose_callback,10)
             self.explore_timer = self.create_timer(1.0, self.explore)
 
         else:
@@ -157,7 +161,8 @@ class FinderNode(Node):
     
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
-        self.robot_position = (x, y)
+        self.robot_odom_position = (x, y)
+        self.robot_position = (x + self.offset[0], y + self.offset[1])
 
         orientation_q = msg.pose.pose.orientation
         quaternion = (orientation_q.x, orientation_q.y, orientation_q.z, orientation_q.w)
@@ -173,6 +178,15 @@ class FinderNode(Node):
         if self.GAZEBO:
             self.paint_wall()
             self.update_plot()
+    
+    def pose_callback(self, msg):
+        if not self.map_received:
+            return
+        x = msg.pose.pose.position.x
+        y = msg.pose.pose.position.y
+        self.amcl_pose = (x, y)
+        self.offset = (x - self.robot_odom_position[0], y - self.robot_odom_position[1])
+        #self.get_logger().info(f"Offset: {self.offset}")        
 
     def ir_callback(self,msg):
         if not self.exploring:
@@ -549,7 +563,7 @@ class FinderNode(Node):
         goalPose.pose.position.y = float(chosen_frontier[0])
 
         # Transform to a valid goal
-        goalPose = self.transform_to_valid_goal(goalPose)
+        #goalPose = self.transform_to_valid_goal(goalPose)
 
         # Calculate yaw angle to face the goal
         goal_x = goalPose.pose.position.x
