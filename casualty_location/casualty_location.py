@@ -67,7 +67,7 @@ class FinderNode(Node):
             self.ir_sub = self.create_subscription(String, '/ir_data', self.ir_callback, 10)
             self.latest_ir_data = None
         else:
-            self.latest_ir_data = [20] * 8
+            self.latest_ir_data = [20,20,20,20,80,80,80,80]
 
         self.nav_to_pose_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         self.spin_client = ActionClient(self, Spin, 'spin')
@@ -322,8 +322,8 @@ class FinderNode(Node):
         bot_row = int((self.robot_cache[self.pose_index].y - self.initial_origin[1]) / self.resolution)
         rows, cols = len(self.grid), len(self.grid[0])
 
-        start_angle = math.degrees(self.robot_cache[self.pose_index].yaw) - SENSOR_FOV / 2
-        end_angle = math.degrees(self.robot_cache[self.pose_index].yaw) + SENSOR_FOV / 2
+        start_angle = math.degrees(self.robot_cache[self.pose_index].yaw) + SENSOR_FOV / 2
+        end_angle = math.degrees(self.robot_cache[self.pose_index].yaw) - SENSOR_FOV / 2
         num_rays = int(SENSOR_FOV * 2)
         
         data = self.latest_ir_data
