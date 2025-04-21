@@ -9,6 +9,8 @@ class RvizMarker(Node):
         self.marker_pub = self.create_publisher(Marker, 'frontier_chosen_marker', 10)
         self.marker_array_pub = self.create_publisher(MarkerArray, 'frontier_all_marker', 10)
 
+        self.marker_pub_2 = self.create_publisher(Marker, 'heatmap_chosen_frontier', 10)
+
         # used for deleting previous markers
         self.prev_marker_array = None
 
@@ -57,6 +59,16 @@ class RvizMarker(Node):
         self.marker_pub.publish(self.create_marker(
             position=chosen_frontier, 
             color=(0.6, 0.0, 0.1, 1.0), 
+            scale=(0.3, 0.3, 0.3))
+            )
+
+    def publish_marker2(self, chosen_frontier):
+        marker_x = chosen_frontier[1] * self.map_res + self.map_origin_x
+        marker_y = chosen_frontier[0] * self.map_res + self.map_origin_y
+        self.get_logger().info(f"Publishing marker at frontier {chosen_frontier} coords: {marker_x}, {marker_y}")
+        self.marker_pub_2.publish(self.create_marker(
+            position=chosen_frontier, 
+            color=(0.6, 0.7, 0.1, 1.0), 
             scale=(0.3, 0.3, 0.3))
             )
 

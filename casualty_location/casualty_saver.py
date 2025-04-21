@@ -39,7 +39,7 @@ from std_msgs.msg import Bool
 
 
 
-DIST_TO_CASUALTY = 2.5  # Distance to casualty before stopping to fire
+DIST_TO_CASUALTY = 3.5  # Distance to casualty before stopping to fire
 
 
 
@@ -129,10 +129,9 @@ class CasualtySaver(Node):
 
 
     def map_callback(self, msg):
-        if not self.map_data:
-            self.cas_marker.update_map_consts(
-                msg.info.resolution,
-                msg.info.origin.position.x, msg.info.origin.position.y)
+        self.cas_marker.update_map_consts(
+            msg.info.resolution,
+            msg.info.origin.position.x, msg.info.origin.position.y)
                 
         self.map_data = msg
         data = np.array(self.map_data.data)

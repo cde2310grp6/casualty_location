@@ -17,6 +17,10 @@ from nav2_msgs.action import Spin
 from rclpy.duration import Duration
 import random
 
+
+
+import casualty_location.rviz_marker as rviz_marker
+
 # for mission control
 from custom_msg_srv.msg import CasualtySaveStatus, CasualtyLocateStatus, ArrayCasualtyPos
 from custom_msg_srv.srv import StartCasualtyService
@@ -30,7 +34,7 @@ DELAY_IR = 0.2  # Delay in seconds for IR data processing
 
 CASUALTY_COUNT = 2 # Number of casualties to find
 
-DIST_TO_CASUALTY = 2.80 # Distance to casualty before stopping to fire
+DIST_TO_CASUALTY = 3.9 # Distance to casualty before stopping to fire
 
 class BotPose(object):
     def __init__(self, x, y, yaw):
@@ -98,6 +102,10 @@ class FinderNode(Node):
         self.robot_marker, self.robot_arrow = None, None
         
         self.is_spinning = False
+
+        # for showing casualty locations in rviz
+        self.heat_marker = rviz_marker.RvizMarker()
+
         plt.ion()
 
 
@@ -128,6 +136,12 @@ class FinderNode(Node):
         return response
     
     def map_callback(self, msg):
+        
+        self.heat_marker.update_map_consts(
+            msg.info.resolution,
+            msg.info.origin.position.x, msg.info.origin.position.y)
+
+
         def clean_origin_cache(self):
         # Remove old origins from the cache
             if len(self.origin_cache) > ORIGIN_CACHE_SIZE:
@@ -402,6 +416,8 @@ class FinderNode(Node):
         nav_goal = NavigateToPose.Goal()
         nav_goal.pose = goal_msg
 
+        self.heat_marker.publish_marker2((y,x))
+
         self.get_logger().info(f"Navigating to: x={x}, y={y}")
         self.nav_to_pose_client.wait_for_server()
         send_goal_future = self.nav_to_pose_client.send_goal_async(nav_goal)
@@ -563,7 +579,7 @@ class FinderNode(Node):
         goalPose.pose.position.y = float(chosen_frontier[0])
 
         # Transform to a valid goal
-        #goalPose = self.transform_to_valid_goal(goalPose)
+        goalPose = self.transform_to_valid_goal(goalPose)
 
         # Calculate yaw angle to face the goal
         goal_x = goalPose.pose.position.x
@@ -630,7 +646,7 @@ class FinderNode(Node):
         if len(hotspots) == CASUALTY_COUNT:
             for hotspot in hotspots:
                 cY, cX, value = hotspot
-                self.get_logger().info(f"Casualty at map index: ({cY}, {cX}) with value: {value}")
+                self.get_logger().info(f"Casualty at map index (y, x): ({cY}, {cX}) with value: {value}")
                 cas_x = cX
                 cas_y = cY
                 self.casualties.append((cas_x, cas_y))
